@@ -4,24 +4,28 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Briefcase, Calendar, TrendingUp, FileText } from 'lucide-react'
+import { Briefcase, Calendar, TrendingUp, FileText, Zap, Eye } from 'lucide-react'
 
 export interface JobApplication {
   id: string
   jobTitle: string
   company: string
-  status: 'pending' | 'applied' | 'reviewed' | 'interview' | 'rejected' | 'offered' | 'analyzed'
+  status: 'pending' | 'applied' | 'reviewed' | 'interview' | 'rejected' | 'offered' | 'analyzed' | 'cover letter generated' | 'auto-applied' | 'submitted'
   fitScore: number
   dateApplied: string
   url?: string
   location?: string
   salary?: string
   description?: string
+  autoApplyEnabled?: boolean
+  submissionStatus?: 'pending' | 'submitted' | 'failed' | 'requires_review'
+  submittedAt?: string
 }
 
 interface JobsTableProps {
   jobs: JobApplication[]
   onGenerateCoverLetter: (applicationId: string, jobTitle: string, company: string) => void
+  onAutoApply: (applicationId: string, jobTitle: string, company: string) => void
 }
 
 const statusColors = {
@@ -32,6 +36,9 @@ const statusColors = {
   rejected: 'bg-red-100 text-red-800',
   offered: 'bg-green-100 text-green-800',
   analyzed: 'bg-indigo-100 text-indigo-800',
+  'cover letter generated': 'bg-teal-100 text-teal-800',
+  'auto-applied': 'bg-cyan-100 text-cyan-800',
+  submitted: 'bg-green-100 text-green-800',
 }
 
 const statusLabels = {
@@ -42,6 +49,9 @@ const statusLabels = {
   rejected: 'Rejected',
   offered: 'Offered',
   analyzed: 'Analyzed',
+  'cover letter generated': 'CL Generated',
+  'auto-applied': 'Auto Applied',
+  submitted: 'Submitted',
 }
 
 const getFitScoreColor = (score: number) => {
@@ -50,7 +60,7 @@ const getFitScoreColor = (score: number) => {
   return 'text-red-600'
 }
 
-export function JobsTable({ jobs, onGenerateCoverLetter }: JobsTableProps) {
+export function JobsTable({ jobs, onGenerateCoverLetter, onAutoApply }: JobsTableProps) {
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       month: 'short',
@@ -128,15 +138,28 @@ export function JobsTable({ jobs, onGenerateCoverLetter }: JobsTableProps) {
                       </div>
                     </TableCell>
                     <TableCell className="text-center">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onGenerateCoverLetter(job.id, job.jobTitle, job.company)}
-                        className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                      >
-                        <FileText className="h-4 w-4 mr-1" />
-                        Cover Letter
-                      </Button>
+                      <div className="flex gap-2 justify-center">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onGenerateCoverLetter(job.id, job.jobTitle, job.company)}
+                          className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                          disabled={job.status === 'applied' || job.status === 'cover letter generated' || job.status === 'submitted'}
+                        >
+                          <FileText className="h-4 w-4 mr-1" />
+                          Cover Letter
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onAutoApply(job.id, job.jobTitle, job.company)}
+                          className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                          disabled={job.status === 'applied' || job.status === 'submitted' || job.status === 'auto-applied'}
+                        >
+                          <Zap className="h-4 w-4 mr-1" />
+                          Auto Apply
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

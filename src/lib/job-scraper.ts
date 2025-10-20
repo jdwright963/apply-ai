@@ -40,25 +40,43 @@ export class JobScraper {
 
       const page = await this.browser.newPage()
       
-      // Set user agent to avoid detection
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36')
+      // Set longer timeout and more permissive settings
+      page.setDefaultTimeout(60000) // 60 seconds
+      page.setDefaultNavigationTimeout(60000) // 60 seconds
       
-      // Navigate to the job posting
-      await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 })
+      console.log('Navigating to URL:', url)
+      
+      // Navigate to the job posting with more permissive settings
+      await page.goto(url, { 
+        waitUntil: 'domcontentloaded', // Less strict than 'networkidle'
+        timeout: 60000 
+      })
+      
+      console.log('Page loaded, waiting for content...')
       
       // Wait for content to load
-      await page.waitForTimeout(2000)
+      await page.waitForTimeout(3000)
+      
+      console.log('Getting page content...')
       
       // Get the page content
       const content = await page.content()
       
       await page.close()
       
+      console.log('Content retrieved, length:', content.length)
+      
       // Parse with Cheerio
       const $ = cheerio.load(content)
       
       // Extract job data based on common patterns
       const jobData = this.extractJobData($, url)
+      
+      console.log('Job data extracted:', {
+        title: jobData.title,
+        company: jobData.company,
+        descriptionLength: jobData.description.length
+      })
       
       return {
         success: true,
@@ -197,6 +215,10 @@ export class JobScraper {
       '.content',
       'article',
       '.job-content',
+      '.job-description',
+      '.description',
+      '[class*="job"]',
+      '[class*="description"]',
       'body'
     ]
     
@@ -204,10 +226,18 @@ export class JobScraper {
       const element = $(selector)
       if (element.length > 0) {
         const text = element.text().trim()
-        if (text.length > 100) { // Only return if substantial content
+        if (text.length > 200) { // Only return if substantial content
+          console.log(`Found content with selector '${selector}', length: ${text.length}`)
           return text
         }
       }
+    }
+    
+    // If no substantial content found, try to get all text from body
+    const bodyText = $('body').text().trim()
+    if (bodyText.length > 100) {
+      console.log(`Using body text as fallback, length: ${bodyText.length}`)
+      return bodyText
     }
     
     return 'Job description not found'

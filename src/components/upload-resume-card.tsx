@@ -4,7 +4,6 @@ import { useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Upload, FileText, X, Loader2 } from 'lucide-react'
-// client-side validation only; parsing happens on server route
 import { validateResumeFile } from '@/lib/resume-parser'
 
 interface UploadResumeCardProps {

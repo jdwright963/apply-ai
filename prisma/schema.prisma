@@ -47,6 +47,7 @@ model User {
   emailVerified DateTime?
   image         String?
   resumeText    String?
+  resumeData    Json?          // Structured resume data
   humanifyMode  Boolean        @default(true)
   accounts      Account[]
   sessions      Session[]
@@ -70,6 +71,14 @@ model Application {
   fitScore        Float?
   appliedAt       DateTime @default(now())
   scrapedAt       DateTime @default(now())
+  
+  // Auto-application fields
+  autoApplyEnabled Boolean  @default(false)
+  formData         Json?    // Detected form fields and values
+  applicationPreview Json?  // Preview of application before submission
+  submittedAt      DateTime?
+  submissionStatus String?  // "pending", "submitted", "failed", "requires_review"
+  submissionError  String?  @db.Text
 }
 
 model VerificationToken {

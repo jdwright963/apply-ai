@@ -1,157 +1,271 @@
-# Apply AI - T3 Stack with Magic Link Authentication
+# Apply AI - AI Job Application Assistant
 
-A Next.js application built with the T3 stack (Next.js + tRPC + Prisma + Tailwind + NextAuth) featuring magic link email authentication.
+A comprehensive Next.js application that automates job applications using AI, structured resume parsing, and browser automation.
 
-## Features
+## 🚀 Features
 
-- ✅ Next.js 15 with App Router
-- ✅ TypeScript
-- ✅ Tailwind CSS
-- ✅ tRPC for type-safe APIs
-- ✅ Prisma with PostgreSQL
-- ✅ NextAuth.js with magic link authentication
-- ✅ Resend for email delivery
-- ✅ No passwords, no OAuth - just magic links!
+### Core Functionality
+- **Magic Link Authentication** - Secure email-based login (no passwords)
+- **Resume Upload & Parsing** - Supports PDF and DOCX formats
+- **Job Scraping** - Automatically extracts job details from URLs
+- **AI Cover Letter Generation** - Personalized cover letters using OpenAI
+- **Application Tracking** - Database-backed application management
 
-## Tech Stack
+### 🤖 Auto-Application Features (NEW!)
+- **Structured Resume Parsing** - Extracts name, email, phone, experience, skills, education
+- **Form Field Detection** - Automatically detects application form fields
+- **Browser Automation** - Uses Playwright to fill and submit forms
+- **Application Preview** - Review applications before submission
+- **Smart Field Mapping** - Maps resume data to form fields intelligently
+- **Error Handling** - Comprehensive error handling and retry logic
 
-- **Framework**: Next.js 15
-- **Language**: TypeScript
-- **Styling**: Tailwind CSS
-- **API**: tRPC
-- **Database**: PostgreSQL with Prisma ORM
-- **Authentication**: NextAuth.js with EmailProvider
-- **Email Service**: Resend
+## 🛠 Tech Stack
 
-## Prerequisites
+- **Frontend**: Next.js 15, React, TypeScript, Tailwind CSS
+- **Backend**: tRPC, Prisma, PostgreSQL
+- **Authentication**: NextAuth.js with magic links
+- **AI**: OpenAI GPT-4 for cover letter generation and resume parsing
+- **Browser Automation**: Playwright
+- **Email**: Resend SDK
+- **UI Components**: shadcn/ui
 
-- Node.js 18+ 
+## 📋 Prerequisites
+
+- Node.js 18+
 - PostgreSQL database
-- Resend account for email delivery
+- OpenAI API key
+- Resend API key
 
-## Setup Instructions
+## 🚀 Installation
 
-### 1. Clone and Install Dependencies
+1. **Clone the repository**
+   ```bash
+   git clone <your-repo-url>
+   cd apply-ai
+   ```
 
-```bash
-npm install
+2. **Install dependencies**
+   ```bash
+   npm install
+   ```
+
+3. **Set up environment variables**
+   ```bash
+   cp .env.example .env.local
+   ```
+   
+   Fill in your environment variables:
+   ```env
+   # Database
+   DATABASE_URL="postgresql://username:password@localhost:5432/apply_ai"
+
+   # NextAuth
+   NEXTAUTH_SECRET="your-secret-key"
+   NEXTAUTH_URL="http://localhost:3000"
+
+   # Email (Resend)
+   RESEND_API_KEY="your-resend-api-key"
+   EMAIL_FROM="noreply@yourdomain.com"
+
+   # OpenAI
+   OPENAI_API_KEY="your-openai-api-key"
+   ```
+
+4. **Set up the database**
+   ```bash
+   npx prisma migrate dev
+   npx prisma generate
+   ```
+
+5. **Install Playwright browsers**
+   ```bash
+   npx playwright install chromium
+   ```
+
+6. **Start the development server**
+   ```bash
+   npm run dev
+   ```
+
+## 🎯 Usage
+
+### Basic Workflow
+1. **Sign In** - Enter your email to receive a magic link
+2. **Upload Resume** - Upload your PDF or DOCX resume
+3. **Add Job URLs** - Paste job posting URLs
+4. **Generate Applications** - Let the AI scrape job details and create applications
+
+### Auto-Application Workflow
+1. **Upload Resume** - The system parses your resume into structured data
+2. **Add Job URLs** - Paste job application URLs
+3. **Click "Auto Apply"** - Opens the application preview modal
+4. **Detect Form Fields** - Automatically detects form fields on the job site
+5. **Review Application** - Preview the filled form before submission
+6. **Submit Application** - Automatically fills and submits the application
+
+## 🔧 API Endpoints
+
+### Resume Management
+- `POST /api/resume/upload` - Upload and parse resume files
+- `api.resume.get` - Get resume data and settings
+- `api.resume.updateHumanifyMode` - Update AI humanization settings
+
+### Application Management
+- `api.application.getAll` - Get all applications
+- `api.application.analyzeJobPosting` - Scrape job posting details
+- `api.application.generateCoverLetter` - Generate AI cover letter
+- `api.application.detectFormFields` - Detect form fields on job sites
+- `api.application.autoApply` - Automatically apply to jobs
+- `api.application.updateSubmissionStatus` - Update application status
+
+## 🗄 Database Schema
+
+### User Model
+```prisma
+model User {
+  id            String         @id @default(cuid())
+  name          String?
+  email         String         @unique
+  emailVerified DateTime?
+  image         String?
+  resumeText    String?        // Raw resume text
+  resumeData    Json?          // Structured resume data
+  humanifyMode  Boolean        @default(true)
+  accounts      Account[]
+  sessions      Session[]
+  applications  Application[]
+}
 ```
 
-### 2. Database Setup
-
-1. Create a PostgreSQL database
-2. Copy `env.example` to `.env.local`
-3. Update the `DATABASE_URL` in `.env.local` with your PostgreSQL connection string
-
-```bash
-cp env.example .env.local
+### Application Model
+```prisma
+model Application {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  url             String
+  company         String?
+  title           String?
+  description     String?  @db.Text
+  location        String?
+  salary          String?
+  requirements    String[]
+  responsibilities String[]
+  coverLetter     String?  @db.Text
+  status          String   @default("Pending")
+  fitScore        Float?
+  appliedAt       DateTime @default(now())
+  scrapedAt       DateTime @default(now())
+  
+  // Auto-application fields
+  autoApplyEnabled Boolean  @default(false)
+  formData         Json?    // Detected form fields
+  applicationPreview Json?  // Preview before submission
+  submittedAt      DateTime?
+  submissionStatus String?  // "pending", "submitted", "failed"
+  submissionError  String?  @db.Text
+}
 ```
 
-### 3. Environment Variables
+## 🤖 AI Features
 
-Update `.env.local` with your actual values:
+### Resume Parsing
+The system uses OpenAI GPT-4 to parse resumes into structured data:
+- Personal information (name, email, phone, location)
+- Professional summary
+- Work experience with achievements
+- Education details
+- Skills and certifications
+- Projects and portfolio links
 
+### Cover Letter Generation
+AI-generated cover letters that:
+- Match your resume to job requirements
+- Use natural, conversational tone (configurable)
+- Avoid generic phrases
+- Include specific achievements and skills
+
+### Form Field Detection
+Intelligent form field detection that:
+- Identifies common field types (name, email, phone, etc.)
+- Calculates confidence scores
+- Maps resume data to appropriate fields
+- Handles various form layouts and naming conventions
+
+## 🔒 Security Features
+
+- **Magic Link Authentication** - No passwords stored
+- **Session Management** - Secure session handling
+- **User Isolation** - Users can only access their own data
+- **Input Validation** - Comprehensive input validation with Zod
+- **Error Handling** - Secure error handling without data leakage
+
+## 🚀 Deployment
+
+### Environment Setup
+1. Set up PostgreSQL database
+2. Configure environment variables
+3. Install Playwright browsers on server
+4. Set up Resend email service
+5. Configure OpenAI API access
+
+### Production Considerations
+- Set `headless: true` in Playwright configuration
+- Configure proper CORS settings
+- Set up monitoring and logging
+- Implement rate limiting for API calls
+- Set up backup strategies for database
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+1. **Resume Upload Fails**
+   - Check file format (PDF/DOCX only)
+   - Verify file size (< 10MB)
+   - Check OpenAI API key
+
+2. **Form Detection Issues**
+   - Ensure job site is accessible
+   - Check for anti-bot measures
+   - Verify Playwright installation
+
+3. **Auto-Application Fails**
+   - Check browser automation settings
+   - Verify form field detection
+   - Review error logs
+
+### Debug Mode
+Enable debug logging by setting:
 ```env
-# Database
-DATABASE_URL="postgresql://username:password@localhost:5432/apply_ai?schema=public"
-
-# NextAuth
-NEXTAUTH_URL="http://localhost:3000"
-NEXTAUTH_SECRET="your-secret-key-here"
-
-# Resend (for email delivery)
-RESEND_API_KEY="your-resend-api-key-here"
-
-# Email Configuration (for Resend)
-EMAIL_FROM="noreply@yourdomain.com"
-EMAIL_SERVER_HOST="smtp.resend.com"
-EMAIL_SERVER_PORT="587"
-EMAIL_SERVER_USER="resend"
-EMAIL_SERVER_PASSWORD="your-resend-api-key-here"
+NODE_ENV=development
 ```
 
-### 4. Resend Setup
+## 📈 Future Enhancements
 
-1. Sign up at [Resend](https://resend.com)
-2. Get your API key from the dashboard
-3. Add your domain and verify it
-4. Update the `RESEND_API_KEY` and `EMAIL_FROM` in your `.env.local`
+- [ ] Multi-language support
+- [ ] Advanced form field detection
+- [ ] Application tracking integrations
+- [ ] Resume optimization suggestions
+- [ ] Interview scheduling automation
+- [ ] Salary negotiation assistance
 
-### 5. Database Migration
-
-```bash
-npx prisma migrate dev --name init
-npx prisma generate
-```
-
-### 6. Run the Development Server
-
-```bash
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) in your browser.
-
-## Project Structure
-
-```
-src/
-├── app/                    # Next.js App Router
-│   ├── auth/
-│   │   └── signin/         # Login page
-│   ├── dashboard/          # Protected dashboard
-│   ├── layout.tsx         # Root layout with providers
-│   └── page.tsx           # Home page (redirects)
-├── components/
-│   └── providers.tsx      # tRPC and NextAuth providers
-├── lib/
-│   ├── auth.ts            # NextAuth configuration
-│   └── db.ts              # Prisma client
-├── pages/
-│   └── api/               # API routes
-│       ├── auth/          # NextAuth API routes
-│       └── trpc/          # tRPC API routes
-├── server/
-│   └── api/               # tRPC server setup
-│       ├── root.ts        # Main router
-│       └── trpc.ts        # tRPC configuration
-└── utils/
-    └── api.ts             # tRPC client
-```
-
-## Authentication Flow
-
-1. User visits the app and is redirected to `/auth/signin`
-2. User enters their email address
-3. A magic link is sent to their email via Resend
-4. User clicks the link and is automatically signed in
-5. User is redirected to `/dashboard`
-6. Session is managed by NextAuth with database sessions
-
-## Available Scripts
-
-- `npm run dev` - Start development server
-- `npm run build` - Build for production
-- `npm run start` - Start production server
-- `npm run lint` - Run ESLint
-- `npx prisma studio` - Open Prisma Studio
-- `npx prisma migrate dev` - Run database migrations
-- `npx prisma generate` - Generate Prisma client
-
-## Deployment
-
-1. Set up a PostgreSQL database (e.g., Supabase, Railway, or Neon)
-2. Configure environment variables in your deployment platform
-3. Run database migrations
-4. Deploy to Vercel, Netlify, or your preferred platform
-
-## Contributing
+## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Submit a pull request
+4. Add tests if applicable
+5. Submit a pull request
 
-## License
+## 📄 License
 
-MIT
+This project is licensed under the MIT License.
+
+## 🆘 Support
+
+For support, please open an issue on GitHub or contact the development team.
+
+---
+
+**Built with ❤️ using Next.js, tRPC, Prisma, and OpenAI**
