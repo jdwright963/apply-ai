@@ -48,7 +48,6 @@ model User {
   image         String?
   resumeText    String?
   resumeData    Json?          // Structured resume data
-  humanifyMode  Boolean        @default(true)
   accounts      Account[]
   sessions      Session[]
   applications  Application[]

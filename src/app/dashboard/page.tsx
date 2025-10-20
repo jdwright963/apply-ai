@@ -7,7 +7,6 @@ import { UploadResumeCard } from '@/components/upload-resume-card'
 import { JobUrlsCard } from '@/components/job-urls-card'
 import { GenerateApplyButton } from '@/components/generate-apply-button'
 import { JobsTable, type JobApplication } from '@/components/jobs-table'
-import { HumanifyToggle } from '@/components/humanify-toggle'
 import { CoverLetterModal } from '@/components/cover-letter-modal'
 import { ApplicationPreviewModal } from '@/components/application-preview-modal'
 import { Button } from '@/components/ui/button'
@@ -294,9 +293,6 @@ export default function Dashboard() {
             <UploadResumeCard onResumeUpload={handleResumeUpload} />
             <JobUrlsCard onUrlsChange={handleUrlsChange} />
           </div>
-
-          {/* Humanify Toggle */}
-          <HumanifyToggle initialValue={resumeData?.humanifyMode ?? true} />
 
           {/* Generate & Apply Button */}
           <GenerateApplyButton
