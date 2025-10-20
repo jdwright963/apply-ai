@@ -55,6 +55,7 @@ export function ApplicationPreviewModal({
 
       if (result.success) {
         setPreviewData(result.formFields)
+        console.log(`✅ Detected ${result.formFields.fields?.length || 0} form fields`)
       } else {
         setError('Failed to detect form fields')
       }
@@ -71,6 +72,9 @@ export function ApplicationPreviewModal({
     setError(null)
 
     try {
+      console.log('🚀 Starting auto-apply process...')
+      console.log('👀 A browser window will open - watch the auto-fill process!')
+      
       const response = await fetch('/api/application/auto-apply', {
         method: 'POST',
         headers: {
@@ -90,6 +94,10 @@ export function ApplicationPreviewModal({
       const result = await response.json()
 
       if (result.success) {
+        console.log('✅ Auto-fill complete! Browser window will stay open for manual review.')
+        console.log('📋 Please review the filled form and submit manually when ready.')
+        console.log('❌ Close the browser window when done.')
+        
         onApplicationSubmitted()
         onClose()
       } else {
@@ -127,116 +135,54 @@ export function ApplicationPreviewModal({
         </DialogHeader>
 
         <div className="flex-grow overflow-y-auto space-y-6 py-4">
-          {/* Form Detection Section */}
+          {/* Enhanced Workflow Explanation */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Eye className="h-5 w-5" />
-                Form Detection
+                Enhanced Auto-Apply Workflow
               </CardTitle>
               <CardDescription>
-                Detect and analyze the application form fields
+                Watch the magic happen in real-time!
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <Button 
-                onClick={handleDetectFormFields}
-                disabled={isDetecting}
-                className="w-full"
-              >
-                {isDetecting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Detecting Form Fields...
-                  </>
-                ) : (
-                  'Detect Form Fields'
-                )}
-              </Button>
-
-              {previewData && (
-                <div className="mt-4 space-y-4">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline">
-                      {previewData.fields?.length || 0} Fields Detected
-                    </Badge>
-                    <Badge variant="outline">
-                      Confidence: {Math.round((previewData.confidence || 0) * 100)}%
-                    </Badge>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {previewData.fields?.map((field: any, index: number) => (
-                      <div key={index} className="p-3 border rounded-lg">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="font-medium text-sm">
-                            {field.label || field.placeholder || field.fieldType}
-                          </span>
-                          <Badge variant="secondary" className="text-xs">
-                            {Math.round(field.confidence * 100)}%
-                          </Badge>
-                        </div>
-                        <div className="text-xs text-gray-600">
-                          {field.type} • {field.fieldType}
-                          {field.required && ' • Required'}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+              <div className="space-y-4">
+                <div className="bg-blue-50 p-4 rounded-lg">
+                  <h4 className="font-medium text-blue-900 mb-2">🚀 How it works:</h4>
+                  <ol className="list-decimal list-inside space-y-1 text-sm text-blue-800">
+                    <li><strong>Click "Start Auto-Apply"</strong> → Opens visible browser window</li>
+                    <li><strong>Watch auto-fill</strong> → See Playwright fill fields in real-time</li>
+                    <li><strong>Review & edit</strong> → Manually adjust any fields in the browser</li>
+                    <li><strong>Submit manually</strong> → Click submit button when ready</li>
+                    <li><strong>Close browser</strong> → Done!</li>
+                  </ol>
                 </div>
-              )}
+
+                <div className="bg-green-50 p-4 rounded-lg">
+                  <h4 className="font-medium text-green-900 mb-2">✅ What gets auto-filled:</h4>
+                  <ul className="list-disc list-inside space-y-1 text-sm text-green-800">
+                    <li>Personal info (name, email, phone, LinkedIn, GitHub)</li>
+                    <li>Work experience and education</li>
+                    <li>Skills and qualifications</li>
+                    <li>AI-generated cover letter</li>
+                    <li>Portfolio/website links</li>
+                  </ul>
+                </div>
+
+                <div className="bg-yellow-50 p-4 rounded-lg">
+                  <h4 className="font-medium text-yellow-900 mb-2">⚠️ Manual review needed for:</h4>
+                  <ul className="list-disc list-inside space-y-1 text-sm text-yellow-800">
+                    <li>Radio buttons and dropdowns</li>
+                    <li>File uploads (resume, documents)</li>
+                    <li>Custom questions</li>
+                    <li>Salary expectations</li>
+                    <li>Availability dates</li>
+                  </ul>
+                </div>
+              </div>
             </CardContent>
           </Card>
-
-          {/* Application Preview Section */}
-          {previewData && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Application Preview</CardTitle>
-                <CardDescription>
-                  Review the detected form fields before submission
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {previewData.screenshot && (
-                  <div className="mb-4">
-                    <img 
-                      src={`data:image/png;base64,${previewData.screenshot}`}
-                      alt="Application Preview"
-                      className="w-full border rounded-lg"
-                    />
-                  </div>
-                )}
-
-                <div className="space-y-4">
-                  <div className="flex items-center space-x-2">
-                    <Checkbox 
-                      id="review-before-submit"
-                      checked={reviewBeforeSubmit}
-                      onCheckedChange={(checked) => setReviewBeforeSubmit(checked as boolean)}
-                    />
-                    <Label htmlFor="review-before-submit">
-                      Review application before submitting
-                    </Label>
-                  </div>
-
-                  <Separator />
-
-                  <div className="text-sm text-gray-600">
-                    <p className="mb-2">
-                      <strong>Note:</strong> This will automatically fill out the application form with your resume data and submit it.
-                    </p>
-                    <ul className="list-disc list-inside space-y-1">
-                      <li>Personal information will be filled from your resume</li>
-                      <li>Cover letter will be generated using AI</li>
-                      <li>Experience and education will be populated</li>
-                      <li>Form will be submitted automatically</li>
-                    </ul>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
 
           {/* Error Display */}
           {error && (
@@ -258,18 +204,18 @@ export function ApplicationPreviewModal({
           </Button>
           <Button 
             onClick={handleAutoApply}
-            disabled={isApplying || !previewData}
+            disabled={isApplying}
             className="bg-green-600 hover:bg-green-700"
           >
             {isApplying ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Submitting Application...
+                Starting Auto-Apply...
               </>
             ) : (
               <>
                 <Send className="mr-2 h-4 w-4" />
-                Submit Application
+                Start Auto-Apply
               </>
             )}
           </Button>
