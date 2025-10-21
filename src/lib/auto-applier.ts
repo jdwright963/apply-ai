@@ -1,5 +1,5 @@
 import { chromium, Browser, Page } from 'playwright'
-import { ResumeData, generateCoverLetter, analyzeFormScreenshots } from './gemini-service'
+import { ResumeData, generateCoverLetter, analyzeFormScreenshots, FormFillInstruction } from './gemini-service'
 
 export interface FormSubmissionResult {
   success: boolean
@@ -56,11 +56,16 @@ export async function autoApplyToJob(
     const screenshots = await captureFormScreenshots(page)
     console.log(`📷 Captured ${screenshots.length} screenshot(s)`)
     
+    console.log('📝 Scraping actual form fields...')
+    const formFields = await scrapeFormFields(page)
+    console.log(`🔍 Found ${formFields.length} form fields on page`)
+    
     console.log('🤖 Analyzing form with Gemini Vision...')
     const analysisResult = await analyzeFormScreenshots(
       screenshots,
       options.resumeText,
       options.jobDescription,
+      formFields,
       options.userPreferences,
       options.coverLetter
     )
@@ -71,16 +76,8 @@ export async function autoApplyToJob(
     
     console.log(`✅ Generated ${analysisResult.instructions.length} fill instructions`)
     
-    console.log('📝 Scraping actual form fields...')
-    const formFields = await scrapeFormFields(page)
-    console.log(`🔍 Found ${formFields.length} form fields on page`)
-    
-    console.log('🔗 Matching Gemini labels to Playwright selectors...')
-    const matchedInstructions = matchLabelsToSelectors(analysisResult.instructions, formFields)
-    console.log(`✅ Matched ${matchedInstructions.length} fields`)
-    
-    console.log('📝 Filling form fields with matched instructions...')
-    await fillFormWithInstructions(page, matchedInstructions, options)
+    console.log('📝 Filling form fields with Gemini instructions...')
+    await fillFormWithInstructions(page, analysisResult.instructions, options)
     
     console.log('✅ Screenshot-based form filling complete!')
     console.log('👀 Browser window will stay open for manual review.')
@@ -154,12 +151,12 @@ async function captureFormScreenshots(page: Page): Promise<Buffer[]> {
   return screenshots
 }
 
-async function fillFormWithInstructions(page: Page, instructions: MatchedInstruction[], options: AutoApplyOptions) {
-  console.log('🎯 Filling form with matched instructions...')
+async function fillFormWithInstructions(page: Page, instructions: FormFillInstruction[], options: AutoApplyOptions) {
+  console.log('🎯 Filling form with Gemini instructions...')
   
   for (const instruction of instructions) {
     try {
-      const { fieldDescription, action, value, selector, confidence, reasoning, matchConfidence } = instruction
+      const { fieldDescription, action, value, selector, confidence, reasoning } = instruction
       
       if (!value || value.trim() === '' || value === 'N/A') {
         console.log(`⏭️ Skipping empty field: ${fieldDescription}`)
@@ -168,11 +165,6 @@ async function fillFormWithInstructions(page: Page, instructions: MatchedInstruc
       
       if (confidence < 0.5) {
         console.log(`⚠️ Low confidence (${Math.round(confidence * 100)}%) for ${fieldDescription}: ${reasoning}`)
-        continue
-      }
-      
-      if (matchConfidence < 0.5) {
-        console.log(`⚠️ Low match confidence (${Math.round(matchConfidence * 100)}%) for ${fieldDescription}`)
         continue
       }
       
@@ -301,7 +293,7 @@ async function handleFileUpload(page: Page) {
 
 // Form scraping and matching functions
 async function scrapeFormFields(page: Page): Promise<FormField[]> {
-  console.log('🔍 Scraping form fields from DOM...')
+  console.log('🔍 Scraping ALL form fields and text elements from DOM...')
   
   const formFields = await page.evaluate(() => {
     const fields: any[] = []
@@ -321,55 +313,91 @@ async function scrapeFormFields(page: Page): Promise<FormField[]> {
       // Skip hidden fields
       if (type === 'hidden') return
       
-      // Find associated label
-      let labelText = ''
-      let labelElement = null
+      // Find ALL associated text (main question + helper text)
+      const allTexts: string[] = []
       
       // Strategy 1: Input inside label
-      labelElement = element.closest('label')
+      const labelElement = element.closest('label')
       if (labelElement) {
-        labelText = labelElement.textContent?.trim() || ''
+        const labelText = labelElement.textContent?.trim() || ''
+        if (labelText) allTexts.push(labelText)
       }
       
       // Strategy 2: Label with 'for' attribute pointing to this input
-      if (!labelText && id) {
-        labelElement = document.querySelector(`label[for="${id}"]`)
-        if (labelElement) {
-          labelText = labelElement.textContent?.trim() || ''
+      if (id) {
+        const forLabel = document.querySelector(`label[for="${id}"]`)
+        if (forLabel) {
+          const forLabelText = forLabel.textContent?.trim() || ''
+          if (forLabelText) allTexts.push(forLabelText)
         }
       }
       
-      // Strategy 3: Look for nearby text that might be a label
-      if (!labelText) {
-        // Look in parent container for text
-        const parent = element.parentElement
-        if (parent) {
-          const textNodes = Array.from(parent.childNodes)
-            .filter(node => node.nodeType === Node.TEXT_NODE)
-            .map(node => node.textContent?.trim())
-            .filter(text => text && text.length > 0)
-          
-          if (textNodes.length > 0) {
-            labelText = textNodes[0] || ''
+      // Strategy 3: Look for ALL text in parent container
+      const parent = element.parentElement
+      if (parent) {
+        // Get all text nodes in parent
+        const textNodes = Array.from(parent.childNodes)
+          .filter(node => node.nodeType === Node.TEXT_NODE)
+          .map(node => node.textContent?.trim())
+          .filter((text): text is string => text !== undefined && text.length > 0)
+        
+        allTexts.push(...textNodes)
+        
+        // Also get text from child elements
+        const childElements = parent.querySelectorAll('h1, h2, h3, h4, h5, h6, p, div, span, label')
+        childElements.forEach(child => {
+          const childText = child.textContent?.trim()
+          if (childText && childText.length > 0) {
+            allTexts.push(childText)
           }
-        }
+        })
       }
       
-      // Strategy 4: Look for previous sibling text
-      if (!labelText) {
-        let sibling = element.previousElementSibling
-        while (sibling && !labelText) {
-          if (sibling.tagName.toLowerCase() === 'label') {
-            labelText = sibling.textContent?.trim() || ''
-          } else if (sibling.textContent?.trim()) {
-            labelText = sibling.textContent.trim()
+      // Strategy 4: Look for previous siblings
+      let sibling = element.previousElementSibling
+      while (sibling) {
+        const siblingText = sibling.textContent?.trim()
+        if (siblingText && siblingText.length > 0) {
+          allTexts.push(siblingText)
+        }
+        
+        // Also check child elements of siblings
+        const siblingChildren = sibling.querySelectorAll('h1, h2, h3, h4, h5, h6, p, div, span, label')
+        siblingChildren.forEach(child => {
+          const childText = child.textContent?.trim()
+          if (childText && childText.length > 0) {
+            allTexts.push(childText)
           }
-          sibling = sibling.previousElementSibling
-        }
+        })
+        
+        sibling = sibling.previousElementSibling
       }
       
-      // Clean up label text (remove asterisks, extra whitespace)
-      labelText = labelText.replace(/\s*\*\s*$/, '').trim()
+      // Strategy 5: Look for parent containers (for radio button groups)
+      let container = element.parentElement
+      while (container && container !== document.body) {
+        // Check if this container has a question-like text
+        const containerText = container.textContent?.trim()
+        if (containerText && containerText.includes('?')) {
+          allTexts.push(containerText)
+        }
+        
+        // Check for headings or labels in this container
+        const headings = container.querySelectorAll('h1, h2, h3, h4, h5, h6, label')
+        headings.forEach(heading => {
+          const headingText = heading.textContent?.trim()
+          if (headingText && headingText.length > 0) {
+            allTexts.push(headingText)
+          }
+        })
+        
+        container = container.parentElement
+      }
+      
+      // Remove duplicates and clean up
+      const uniqueTexts = [...new Set(allTexts)]
+        .map(text => text.replace(/\s+/g, ' ').trim())
+        .filter(text => text.length > 0)
       
       // Generate selector
       let selector = ''
@@ -389,7 +417,7 @@ async function scrapeFormFields(page: Page): Promise<FormField[]> {
         id,
         placeholder,
         className,
-        labelText,
+        allTexts: uniqueTexts,
         isVisible: element.offsetParent !== null
       })
     })
@@ -399,100 +427,11 @@ async function scrapeFormFields(page: Page): Promise<FormField[]> {
   
   // Log found fields
   formFields.forEach((field, index) => {
-    console.log(`📍 Field ${index + 1}: ${field.name || field.id || 'unnamed'} (${field.type}) - Label: "${field.labelText}" - Selector: ${field.selector}`)
+    console.log(`📍 Field ${index + 1}: ${field.name || field.id || 'unnamed'} (${field.type}) - Selector: ${field.selector}`)
+    console.log(`   📝 All texts: ${field.allTexts.join(' | ')}`)
   })
   
   return formFields
-}
-
-function matchLabelsToSelectors(geminiInstructions: any[], formFields: FormField[]): MatchedInstruction[] {
-  console.log('🔗 Matching Gemini labels to Playwright selectors...')
-  
-  const matched: MatchedInstruction[] = []
-  
-  for (const instruction of geminiInstructions) {
-    const { fieldDescription, action, value, labelText, confidence, reasoning } = instruction
-    
-    // Try to find matching form field
-    const matchingField = findMatchingField(labelText, formFields)
-    
-    if (matchingField) {
-      matched.push({
-        ...instruction,
-        selector: matchingField.selector,
-        matchedField: matchingField,
-        matchConfidence: calculateMatchConfidence(labelText, matchingField.labelText)
-      })
-      console.log(`✅ Matched "${labelText}" → ${matchingField.selector} (${matchingField.labelText})`)
-    } else {
-      console.log(`❌ No match found for "${labelText}"`)
-    }
-  }
-  
-  return matched
-}
-
-function findMatchingField(geminiLabel: string, formFields: FormField[]): FormField | null {
-  const normalizedGeminiLabel = normalizeLabel(geminiLabel)
-  
-  // Try exact match first
-  for (const field of formFields) {
-    if (normalizeLabel(field.labelText) === normalizedGeminiLabel) {
-      return field
-    }
-  }
-  
-  // Try partial match
-  for (const field of formFields) {
-    if (normalizeLabel(field.labelText).includes(normalizedGeminiLabel) || 
-        normalizedGeminiLabel.includes(normalizeLabel(field.labelText))) {
-      return field
-    }
-  }
-  
-  // Try keyword matching
-  const geminiKeywords = extractKeywords(normalizedGeminiLabel)
-  for (const field of formFields) {
-    const fieldKeywords = extractKeywords(normalizeLabel(field.labelText))
-    if (hasCommonKeywords(geminiKeywords, fieldKeywords)) {
-      return field
-    }
-  }
-  
-  return null
-}
-
-function normalizeLabel(label: string): string {
-  return label
-    .toLowerCase()
-    .replace(/\s*\*\s*$/, '') // Remove trailing asterisks
-    .replace(/[^\w\s]/g, '') // Remove special characters
-    .trim()
-}
-
-function extractKeywords(label: string): string[] {
-  const commonWords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by']
-  return label
-    .split(/\s+/)
-    .filter(word => word.length > 2 && !commonWords.includes(word))
-}
-
-function hasCommonKeywords(keywords1: string[], keywords2: string[]): boolean {
-  return keywords1.some(k1 => keywords2.some(k2 => k1.includes(k2) || k2.includes(k1)))
-}
-
-function calculateMatchConfidence(geminiLabel: string, fieldLabel: string): number {
-  const normalizedGemini = normalizeLabel(geminiLabel)
-  const normalizedField = normalizeLabel(fieldLabel)
-  
-  if (normalizedGemini === normalizedField) return 1.0
-  if (normalizedGemini.includes(normalizedField) || normalizedField.includes(normalizedGemini)) return 0.8
-  
-  const geminiKeywords = extractKeywords(normalizedGemini)
-  const fieldKeywords = extractKeywords(normalizedField)
-  const commonKeywords = geminiKeywords.filter(k1 => fieldKeywords.some(k2 => k1.includes(k2) || k2.includes(k1)))
-  
-  return commonKeywords.length / Math.max(geminiKeywords.length, fieldKeywords.length)
 }
 
 // Types
@@ -504,18 +443,6 @@ interface FormField {
   id: string
   placeholder: string
   className: string
-  labelText: string
+  allTexts: string[]
   isVisible: boolean
-}
-
-interface MatchedInstruction {
-  fieldDescription: string
-  action: string
-  value: string
-  labelText: string
-  confidence: number
-  reasoning: string
-  selector: string
-  matchedField: FormField
-  matchConfidence: number
 }

@@ -64,7 +64,7 @@ export interface FormFillInstruction {
   fieldDescription: string
   action: 'fill' | 'click' | 'select'
   value: string
-  selector?: string
+  selector: string
   reasoning: string
   confidence: number
 }
@@ -79,6 +79,7 @@ export async function analyzeFormScreenshots(
   screenshots: Buffer[],
   resumeText: string,
   jobDescription: string,
+  formFields: any[],
   userPreferences?: any,
   coverLetter?: string
 ): Promise<FormAnalysisResult> {
@@ -96,32 +97,36 @@ ${userPreferences ? JSON.stringify(userPreferences, null, 2) : 'No user preferen
 COVER LETTER:
 ${coverLetter || 'No cover letter provided'}
 
-TASK: Look at these screenshot(s) of a job application form and tell me exactly how to fill out each field with specific values from the resume, user preferences, and cover letter.
+AVAILABLE FORM FIELDS AND THEIR SELECTORS:
+${JSON.stringify(formFields, null, 2)}
+
+TASK: Look at these screenshot(s) of a job application form and tell me exactly how to fill out each field using the EXACT SELECTORS provided above.
 
 IMPORTANT RULES:
-1. **Be Specific**: Use exact values from the resume (names, dates, numbers, etc.)
-2. **Use User Preferences**: For common questions (gender, race, salary, work authorization, etc.), use the user's preferred values
-3. **Match Field Types**: 
+1. **Use Exact Selectors**: You MUST use the exact CSS selectors from the formFields data above
+2. **Be Specific**: Use exact values from the resume (names, dates, numbers, etc.)
+3. **Use User Preferences**: For common questions (gender, race, salary, work authorization, etc.), use the user's preferred values
+4. **Match Field Types**: 
    - Text inputs: Fill with appropriate text
    - Radio buttons: Click the correct option
    - Checkboxes: Check relevant boxes
    - Dropdowns: Select the best option
-4. **Handle Complex Fields**:
+5. **Handle Complex Fields**:
    - Salary: Use user's salary expectations or realistic ranges based on experience level
    - Years of experience: Calculate from resume dates
    - Skills: Select relevant technologies from resume
    - Location: Use user's current location or "Remote" if applicable
    - Work authorization: Use user's preference
    - Gender/Race: Use user's preferences (respect privacy choices)
-5. **Cover Letter Field**: Look for cover letter text areas and provide instructions to fill them with the provided cover letter
-6. **Be Conservative**: Only fill fields you're confident about
-7. **Format Appropriately**: Use proper formats for dates, phone numbers, etc.
+6. **Cover Letter Field**: Look for cover letter text areas and provide instructions to fill them with the provided cover letter
+7. **Be Conservative**: Only fill fields you're confident about
+8. **Format Appropriately**: Use proper formats for dates, phone numbers, etc.
 
-For each field you can identify, provide:
+For each field you want to fill, provide:
 - fieldDescription: What the field is asking for
 - action: "fill" for text inputs, "click" for radio/checkbox, "select" for dropdowns
 - value: The exact value to enter or option to select
-- labelText: The exact text of the label for this field (as it appears in the screenshot)
+- selector: The EXACT CSS selector from the formFields data above
 - reasoning: Why this value is appropriate
 - confidence: 0-1 confidence score
 
@@ -139,7 +144,7 @@ Output JSON with this structure:
       "fieldDescription": "Full Name text input",
       "action": "fill",
       "value": "John Wright",
-      "labelText": "Full Name *",
+      "selector": "input[name=\"cName\"]",
       "reasoning": "Extracted full name from resume header",
       "confidence": 0.95
     },
@@ -147,7 +152,7 @@ Output JSON with this structure:
       "fieldDescription": "Cover Letter textarea",
       "action": "fill",
       "value": "[COVER_LETTER_FROM_DATABASE]",
-      "labelText": "Cover Letter",
+      "selector": "textarea[name=\"cCoverLetter\"]",
       "reasoning": "Fill with the generated cover letter from the database",
       "confidence": 0.9
     },
@@ -155,7 +160,7 @@ Output JSON with this structure:
       "fieldDescription": "Work authorization radio buttons",
       "action": "click", 
       "value": "Yes",
-      "labelText": "Are you authorized to work in the United States without sponsorship? *",
+      "selector": "input[name=\"section_1747256596389_question_1\"]",
       "reasoning": "User preference indicates authorized to work in US",
       "confidence": 0.9
     }
