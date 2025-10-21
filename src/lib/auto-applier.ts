@@ -1,6 +1,5 @@
 import { chromium, Browser, Page } from 'playwright'
-import { ResumeData, generateCoverLetter } from './gemini-service'
-import { FormField, detectFormFields } from './form-detector'
+import { ResumeData, generateCoverLetter, analyzeFormScreenshots } from './gemini-service'
 
 export interface FormSubmissionResult {
   success: boolean
@@ -12,10 +11,13 @@ export interface FormSubmissionResult {
 
 export interface AutoApplyOptions {
   resumeData: ResumeData
+  resumeText: string // Add raw resume text
   jobDescription: string
   jobTitle: string
   company: string
   reviewBeforeSubmit: boolean
+  userPreferences?: any // User preferences for common form fields
+  coverLetter?: string // Cover letter from database
 }
 
 export async function autoApplyToJob(
@@ -42,18 +44,37 @@ export async function autoApplyToJob(
       timeout: 30000 
     })
     
-    // Wait for page to load
-    await page.waitForTimeout(3000)
+    await page.waitForTimeout(3000) // Wait for page to load
     
     console.log('🔍 Detecting and clicking Apply button...')
     // Try to find and click Apply button first
     await clickApplyButton(page)
     
     console.log('📝 Auto-filling form fields...')
-    // Fill form fields with resume data
-    await fillFormFields(page, options.resumeData, options)
     
-    console.log('✅ Auto-fill complete!')
+    console.log('📸 Capturing form screenshots...')
+    const screenshots = await captureFormScreenshots(page)
+    console.log(`📷 Captured ${screenshots.length} screenshot(s)`)
+    
+    console.log('🤖 Analyzing form with Gemini Vision...')
+    const analysisResult = await analyzeFormScreenshots(
+      screenshots,
+      options.resumeText,
+      options.jobDescription,
+      options.userPreferences,
+      options.coverLetter
+    )
+    
+    if (!analysisResult.success) {
+      throw new Error(analysisResult.error || 'Failed to analyze form screenshots')
+    }
+    
+    console.log(`✅ Generated ${analysisResult.instructions.length} fill instructions`)
+    
+    console.log('📝 Filling form fields with screenshot-based instructions...')
+    await fillFormWithInstructions(page, analysisResult.instructions, options)
+    
+    console.log('✅ Screenshot-based form filling complete!')
     console.log('👀 Browser window will stay open for manual review.')
     console.log('📋 Please review the filled form and submit manually when ready.')
     console.log('❌ Close the browser window when done.')
@@ -72,6 +93,139 @@ export async function autoApplyToJob(
     }
   }
   // Note: Browser stays open - user closes it manually
+}
+
+async function captureFormScreenshots(page: Page): Promise<Buffer[]> {
+  console.log('📸 Starting screenshot capture...')
+  const screenshots: Buffer[] = []
+  
+  // Scroll to top first
+  await page.evaluate(() => window.scrollTo(0, 0))
+  await page.waitForTimeout(1000)
+  
+  // Get viewport height
+  const viewportHeight = await page.evaluate(() => window.innerHeight)
+  const documentHeight = await page.evaluate(() => document.body.scrollHeight)
+  
+  console.log(`📏 Viewport height: ${viewportHeight}px, Document height: ${documentHeight}px`)
+  
+  let currentScroll = 0
+  let screenshotCount = 0
+  
+  while (currentScroll < documentHeight) {
+    console.log(`📷 Taking screenshot ${screenshotCount + 1} at scroll position ${currentScroll}px`)
+    
+    // Take screenshot of current viewport
+    const screenshot = await page.screenshot({ 
+      fullPage: false, // Just viewport
+      type: 'png'
+    })
+    screenshots.push(screenshot)
+    screenshotCount++
+    
+    // Check if there's more content below
+    const remainingHeight = documentHeight - (currentScroll + viewportHeight)
+    if (remainingHeight <= 0) {
+      console.log('✅ Reached end of document')
+      break
+    }
+    
+    // Scroll down by viewport height
+    currentScroll += viewportHeight
+    await page.evaluate((scroll) => window.scrollTo(0, scroll), currentScroll)
+    await page.waitForTimeout(1000) // Let content load
+    
+    // Safety check to prevent infinite loops
+    if (screenshotCount > 10) {
+      console.log('⚠️ Reached maximum screenshot limit (10)')
+      break
+    }
+  }
+  
+  console.log(`✅ Captured ${screenshots.length} screenshot(s)`)
+  return screenshots
+}
+
+async function fillFormWithInstructions(page: Page, instructions: any[], options: AutoApplyOptions) {
+  console.log('🎯 Filling form with screenshot-based instructions...')
+  
+  for (const instruction of instructions) {
+    try {
+      const { fieldDescription, action, value, selector, confidence, reasoning } = instruction
+      
+      if (!value || value.trim() === '' || value === 'N/A') {
+        console.log(`⏭️ Skipping empty field: ${fieldDescription}`)
+        continue
+      }
+      
+      if (confidence < 0.5) {
+        console.log(`⚠️ Low confidence (${Math.round(confidence * 100)}%) for ${fieldDescription}: ${reasoning}`)
+        continue
+      }
+      
+      if (action === 'fill') {
+        // Fill text input
+        if (selector) {
+          const element = await page.locator(selector).first()
+          const isVisible = await element.isVisible()
+          
+          if (isVisible) {
+            await element.clear()
+            
+            // Special handling for cover letter
+            const fillValue = value === '[COVER_LETTER_FROM_DATABASE]' 
+              ? (options.coverLetter || '') 
+              : value
+            
+            await element.fill(fillValue)
+            console.log(`✅ Filled ${fieldDescription} (${Math.round(confidence * 100)}%): ${fillValue.substring(0, 50)}${fillValue.length > 50 ? '...' : ''}`)
+            console.log(`   Reasoning: ${reasoning}`)
+          } else {
+            console.log(`❌ Field not visible: ${fieldDescription} (${selector})`)
+          }
+        } else {
+          console.log(`⚠️ No selector provided for ${fieldDescription}`)
+        }
+        
+      } else if (action === 'click') {
+        // Click radio button or checkbox
+        if (selector) {
+          const element = await page.locator(selector).first()
+          const isVisible = await element.isVisible()
+          
+          if (isVisible) {
+            await element.click()
+            console.log(`✅ Clicked ${fieldDescription} (${Math.round(confidence * 100)}%): ${value}`)
+            console.log(`   Reasoning: ${reasoning}`)
+          } else {
+            console.log(`❌ Field not visible: ${fieldDescription} (${selector})`)
+          }
+        } else {
+          console.log(`⚠️ No selector provided for ${fieldDescription}`)
+        }
+        
+      } else if (action === 'select') {
+        // Select dropdown option
+        if (selector) {
+          const element = await page.locator(selector).first()
+          const isVisible = await element.isVisible()
+          
+          if (isVisible) {
+            await element.selectOption(value)
+            console.log(`✅ Selected ${fieldDescription} (${Math.round(confidence * 100)}%): ${value}`)
+            console.log(`   Reasoning: ${reasoning}`)
+          } else {
+            console.log(`❌ Field not visible: ${fieldDescription} (${selector})`)
+          }
+        } else {
+          console.log(`⚠️ No selector provided for ${fieldDescription}`)
+        }
+      }
+      
+    } catch (error) {
+      console.log(`❌ Failed to fill ${instruction.fieldDescription}: ${error}`)
+    }
+  }
 }
 
 async function clickApplyButton(page: Page) {
@@ -110,195 +264,11 @@ async function clickApplyButton(page: Page) {
   console.log('ℹ️ No apply button found, proceeding with current page')
 }
 
-async function fillFormFields(page: Page, resumeData: ResumeData, options: AutoApplyOptions) {
-  console.log('🔍 Starting form field filling...')
-  console.log('📋 Resume data available:', {
-    name: resumeData.name || 'MISSING',
-    email: resumeData.email || 'MISSING', 
-    phone: resumeData.phone || 'MISSING',
-    hasExperience: !!resumeData.experience?.length,
-    hasEducation: !!resumeData.education?.length,
-    hasSkills: !!resumeData.skills?.length
-  })
-  
-  // Fill basic personal information using current ResumeData structure
-  const fullName = resumeData.name || ''
-  const nameParts = fullName.split(' ')
-  
-  // Try multiple selectors for each field type
-  console.log('👤 Filling name fields...')
-  await fillField(page, 'input[name*="first"], input[id*="first"], input[placeholder*="First"]', nameParts[0] || '')
-  await fillField(page, 'input[name*="last"], input[id*="last"], input[placeholder*="Last"]', nameParts.slice(1).join(' ') || '')
-  await fillField(page, 'input[name*="name"], input[id*="name"], input[placeholder*="Name"], input[placeholder*="Full Name"]', fullName)
-  
-  console.log('📧 Filling email fields...')
-  await fillField(page, 'input[type="email"], input[name*="email"], input[placeholder*="Email"]', resumeData.email || '')
-  
-  console.log('📞 Filling phone fields...')
-  await fillField(page, 'input[type="tel"], input[name*="phone"], input[placeholder*="Phone"], input[placeholder*="Number"]', resumeData.phone || '')
-  
-  console.log('🔗 Filling social/website fields...')
-  await fillField(page, 'input[name*="linkedin"], input[placeholder*="LinkedIn"]', resumeData.linkedin || '')
-  await fillField(page, 'input[name*="github"], input[placeholder*="GitHub"]', resumeData.github || '')
-  await fillField(page, 'input[name*="website"], input[name*="portfolio"], input[placeholder*="Website"]', resumeData.portfolio || '')
-  
-  // Try a more comprehensive approach - find fields by label text
-  console.log('🔍 Trying comprehensive field detection...')
-  await fillFieldByLabel(page, 'Full Name', fullName)
-  await fillFieldByLabel(page, 'Name', fullName)
-  await fillFieldByLabel(page, 'Email', resumeData.email || '')
-  await fillFieldByLabel(page, 'Phone', resumeData.phone || '')
-  await fillFieldByLabel(page, 'Cover Letter', '') // Will be filled after generation
-  
-  // Fill experience
-  if (resumeData.experience && resumeData.experience.length > 0) {
-    const experienceText = resumeData.experience
-      .map(exp => `${exp.title} at ${exp.company} (${exp.startDate} - ${exp.endDate || 'Present'})\n${exp.description || ''}`)
-      .join('\n\n')
-    await fillField(page, 'textarea[name*="experience"], textarea[name*="work"]', experienceText)
-  }
-  
-  // Fill education
-  if (resumeData.education && resumeData.education.length > 0) {
-    const educationText = resumeData.education
-      .map(edu => `${edu.degree} from ${edu.institution}${edu.endDate ? ` (${edu.endDate})` : ''}`)
-      .join('\n')
-    await fillField(page, 'textarea[name*="education"], textarea[name*="degree"]', educationText)
-  }
-  
-  // Fill skills
-  if (resumeData.skills && resumeData.skills.length > 0) {
-    const skillsText = resumeData.skills.join(', ')
-    await fillField(page, 'textarea[name*="skill"], textarea[name*="competenc"]', skillsText)
-  }
-  
-  // Generate and fill cover letter
-  if (resumeData.email && options.jobDescription) {
-    try {
-      console.log('📝 Generating cover letter...')
-      const coverLetterResult = await generateCoverLetter(
-        JSON.stringify(resumeData),
-        options.jobDescription,
-        options.jobTitle,
-        options.company
-      )
-      
-      console.log('📄 Filling cover letter fields...')
-      await fillField(page, 'textarea[name*="cover"], textarea[name*="letter"], textarea[placeholder*="Cover"], textarea[placeholder*="Letter"]', coverLetterResult.coverLetter)
-      await fillFieldByLabel(page, 'Cover Letter', coverLetterResult.coverLetter)
-      console.log('✅ Cover letter filled')
-    } catch (error) {
-      console.error('❌ Failed to generate cover letter:', error)
-    }
-  } else {
-    console.log('⚠️ Skipping cover letter generation - missing email or job description')
-  }
-  
-  // Handle file uploads (resume)
-  await handleFileUpload(page, resumeData)
-}
-
-async function fillFieldByLabel(page: Page, labelText: string, value: string) {
-  if (!value.trim()) return
-  
-  try {
-    // Find label by text content
-    const labels = await page.locator('label').all()
-    
-    for (const label of labels) {
-      const text = await label.textContent()
-      if (text && text.toLowerCase().includes(labelText.toLowerCase())) {
-        // Try to find associated input/textarea
-        const forAttr = await label.getAttribute('for')
-        if (forAttr) {
-          // Label has 'for' attribute pointing to input
-          const input = await page.locator(`#${forAttr}`).first()
-          if (await input.isVisible()) {
-            await input.clear()
-            await input.fill(value)
-            console.log(`✅ Filled by label (for): ${labelText} -> #${forAttr}`)
-            return
-          }
-        } else {
-          // Try to find input/textarea as child or sibling
-          const input = await label.locator('input, textarea').first()
-          if (await input.isVisible()) {
-            await input.clear()
-            await input.fill(value)
-            console.log(`✅ Filled by label (child): ${labelText}`)
-            return
-          }
-          
-          // Try next sibling
-          const nextInput = await label.locator('xpath=following-sibling::input | following-sibling::textarea').first()
-          if (await nextInput.isVisible()) {
-            await nextInput.clear()
-            await nextInput.fill(value)
-            console.log(`✅ Filled by label (sibling): ${labelText}`)
-            return
-          }
-        }
-      }
-    }
-    
-    console.log(`❌ No field found for label: ${labelText}`)
-  } catch (error) {
-    console.log(`❌ Error finding field by label ${labelText}: ${error}`)
-  }
-}
-
-async function fillField(page: Page, selector: string, value: string) {
-  if (!value.trim()) {
-    console.log(`⚠️ Skipping empty field: ${selector}`)
-    return
-  }
-  
-  try {
-    // Try to find the element
-    const element = await page.locator(selector).first()
-    const isVisible = await element.isVisible()
-    
-    if (isVisible) {
-      // Clear and fill the field
-      await element.clear()
-      await element.fill(value)
-      console.log(`✅ Filled ${selector}: ${value.substring(0, 50)}${value.length > 50 ? '...' : ''}`)
-    } else {
-      console.log(`❌ Field not visible: ${selector}`)
-    }
-  } catch (error) {
-    console.log(`❌ Failed to fill ${selector}: ${error}`)
-    
-    // Try alternative approach - find by placeholder text
-    try {
-      const placeholderSelectors = selector.split(', ').map(s => s.trim())
-      for (const sel of placeholderSelectors) {
-        if (sel.includes('placeholder')) {
-          const elements = await page.locator(sel).all()
-          for (const el of elements) {
-            const placeholder = await el.getAttribute('placeholder')
-            if (placeholder && placeholder.toLowerCase().includes(value.toLowerCase().split(' ')[0])) {
-              await el.clear()
-              await el.fill(value)
-              console.log(`✅ Filled by placeholder match: ${sel} (${placeholder})`)
-              return
-            }
-          }
-        }
-      }
-    } catch (altError) {
-      console.log(`❌ Alternative approach also failed: ${altError}`)
-    }
-  }
-}
-
-async function handleFileUpload(page: Page, resumeData: ResumeData) {
+async function handleFileUpload(page: Page) {
   try {
     const fileInput = await page.locator('input[type="file"]').first()
     if (await fileInput.isVisible()) {
       console.log('📎 File upload field detected - please upload resume manually')
-      // Note: For now, we'll let the user handle file uploads manually
-      // In a full implementation, you'd need to provide the actual file path
     }
   } catch (error) {
     console.log('ℹ️ No file upload field found')

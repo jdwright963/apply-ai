@@ -8,6 +8,7 @@ import { JobUrlsCard } from '@/components/job-urls-card'
 import { JobsTable, type JobApplication } from '@/components/jobs-table'
 import { CoverLetterModal } from '@/components/cover-letter-modal'
 import { ApplicationPreviewModal } from '@/components/application-preview-modal'
+import { UserPreferencesCard } from '@/components/user-preferences-card'
 import { Button } from '@/components/ui/button'
 import { LogOut, User } from 'lucide-react'
 import { api } from '@/utils/api'
@@ -243,6 +244,11 @@ export default function Dashboard() {
             onGenerateCoverLetter={handleOpenCoverLetterModal}
             onAutoApply={handleOpenApplicationPreviewModal}
           />
+        </div>
+
+        {/* User Preferences Section */}
+        <div className="mt-8">
+          <UserPreferencesCard />
         </div>
 
         {/* Cover Letter Modal */}

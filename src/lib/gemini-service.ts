@@ -3,24 +3,6 @@ import { z } from 'zod'
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
 
-// Debug function to list available models
-export async function listAvailableModels() {
-  try {
-    const { models } = await genAI.listModels()
-    console.log('Available Gemini models:')
-    for (const model of models) {
-      console.log(`- ${model.name}`)
-      if (model.supportedGenerationMethods) {
-        console.log(`  Supported methods: ${model.supportedGenerationMethods.join(', ')}`)
-      }
-    }
-    return models
-  } catch (error) {
-    console.error('Error listing models:', error)
-    return []
-  }
-}
-
 export const ResumeDataSchema = z.object({
   name: z.string().optional(),
   email: z.string().email().optional(),
@@ -61,6 +43,276 @@ export interface CoverLetterResult {
   coverLetter: string
   fitScore: number
   tone: 'friendly' | 'formal'
+}
+
+export interface FieldMapping {
+  fieldSelector: string
+  fieldLabel: string
+  fieldType: string
+  mappedValue: string
+  confidence: number
+  reasoning: string
+}
+
+export interface FieldMappingResult {
+  success: boolean
+  mappings: FieldMapping[]
+  error?: string
+}
+
+export interface FormFillInstruction {
+  fieldDescription: string
+  action: 'fill' | 'click' | 'select'
+  value: string
+  selector?: string
+  reasoning: string
+  confidence: number
+}
+
+export interface FormAnalysisResult {
+  success: boolean
+  instructions: FormFillInstruction[]
+  error?: string
+}
+
+export async function analyzeFormScreenshots(
+  screenshots: Buffer[],
+  resumeText: string,
+  jobDescription: string,
+  userPreferences?: any,
+  coverLetter?: string
+): Promise<FormAnalysisResult> {
+  const prompt = `You are an expert at analyzing job application forms and matching resume data to form fields.
+
+RESUME TEXT:
+${resumeText}
+
+JOB DESCRIPTION:
+${jobDescription}
+
+USER PREFERENCES:
+${userPreferences ? JSON.stringify(userPreferences, null, 2) : 'No user preferences provided'}
+
+COVER LETTER:
+${coverLetter || 'No cover letter provided'}
+
+TASK: Look at these screenshot(s) of a job application form and tell me exactly how to fill out each field with specific values from the resume, user preferences, and cover letter.
+
+IMPORTANT RULES:
+1. **Be Specific**: Use exact values from the resume (names, dates, numbers, etc.)
+2. **Use User Preferences**: For common questions (gender, race, salary, work authorization, etc.), use the user's preferred values
+3. **Match Field Types**: 
+   - Text inputs: Fill with appropriate text
+   - Radio buttons: Click the correct option
+   - Checkboxes: Check relevant boxes
+   - Dropdowns: Select the best option
+4. **Handle Complex Fields**:
+   - Salary: Use user's salary expectations or realistic ranges based on experience level
+   - Years of experience: Calculate from resume dates
+   - Skills: Select relevant technologies from resume
+   - Location: Use user's current location or "Remote" if applicable
+   - Work authorization: Use user's preference
+   - Gender/Race: Use user's preferences (respect privacy choices)
+5. **Cover Letter Field**: Look for cover letter text areas and provide instructions to fill them with the provided cover letter
+6. **Be Conservative**: Only fill fields you're confident about
+7. **Format Appropriately**: Use proper formats for dates, phone numbers, etc.
+
+For each field you can identify, provide:
+- fieldDescription: What the field is asking for
+- action: "fill" for text inputs, "click" for radio/checkbox, "select" for dropdowns
+- value: The exact value to enter or option to select
+- selector: CSS selector to target the field (if you can determine it)
+- reasoning: Why this value is appropriate
+- confidence: 0-1 confidence score
+
+SPECIAL INSTRUCTIONS:
+- If you see a cover letter text area, provide instructions to fill it with the provided cover letter
+- For demographic questions (gender, race, veteran status, disability), use user preferences
+- For work authorization, use the user's preference
+- For salary expectations, use the user's specified amount or range
+- For location fields, use the user's current location
+
+Output JSON with this structure:
+{
+  "instructions": [
+    {
+      "fieldDescription": "Full Name text input",
+      "action": "fill",
+      "value": "John Wright",
+      "selector": "input[name='fullName']",
+      "reasoning": "Extracted full name from resume header",
+      "confidence": 0.95
+    },
+    {
+      "fieldDescription": "Cover Letter textarea",
+      "action": "fill",
+      "value": "[COVER_LETTER_FROM_DATABASE]",
+      "selector": "textarea[name='coverLetter']",
+      "reasoning": "Fill with the generated cover letter from the database",
+      "confidence": 0.9
+    },
+    {
+      "fieldDescription": "Work authorization radio buttons",
+      "action": "click", 
+      "value": "Yes",
+      "selector": "input[value='Yes'][name='authorization']",
+      "reasoning": "User preference indicates authorized to work in US",
+      "confidence": 0.9
+    }
+  ]
+}`
+
+  try {
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
+    
+    // Convert screenshots to base64 for Gemini Vision
+    const imageParts = screenshots.map(screenshot => ({
+      inlineData: {
+        data: screenshot.toString('base64'),
+        mimeType: 'image/png'
+      }
+    }))
+    
+    const result = await model.generateContent([prompt, ...imageParts])
+    const response = await result.response
+    const text = response.text()
+
+    console.log('Raw Gemini Vision response:', text)
+
+    // Clean up the response text to extract JSON
+    let jsonText = text.trim()
+    
+    // Remove markdown code blocks if present
+    if (jsonText.startsWith('```json')) {
+      jsonText = jsonText.replace(/^```json\s*/, '').replace(/\s*```$/, '')
+    } else if (jsonText.startsWith('```')) {
+      jsonText = jsonText.replace(/^```\s*/, '').replace(/\s*```$/, '')
+    }
+    
+    // Extract JSON object using regex
+    const jsonMatch = jsonText.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) {
+      throw new Error('No JSON object found in response')
+    }
+    
+    const parsed = JSON.parse(jsonMatch[0])
+    
+    if (!parsed.instructions || !Array.isArray(parsed.instructions)) {
+      throw new Error('Invalid response format: missing instructions array')
+    }
+
+    return {
+      success: true,
+      instructions: parsed.instructions
+    }
+
+  } catch (error) {
+    console.error('Error analyzing form screenshots:', error)
+    return {
+      success: false,
+      instructions: [],
+      error: error instanceof Error ? error.message : 'Failed to analyze form screenshots'
+    }
+  }
+}
+
+export async function generateFieldMappings(
+  resumeText: string,
+  formFields: any[],
+  jobDescription: string
+): Promise<FieldMappingResult> {
+  const prompt = `You are an expert at matching resume data to job application form fields. 
+
+RESUME TEXT:
+${resumeText}
+
+JOB DESCRIPTION:
+${jobDescription}
+
+FORM FIELDS:
+${JSON.stringify(formFields, null, 2)}
+
+TASK: For each form field, determine the best value from the resume data to fill it with. Be intelligent about matching:
+
+1. **Name fields**: Extract full name, first name, last name appropriately
+2. **Contact fields**: Use email, phone, address from resume
+3. **Experience fields**: Format work experience appropriately for the field type
+4. **Education fields**: Format education details appropriately
+5. **Skills fields**: List relevant skills, possibly filtered by job requirements
+6. **Cover letter fields**: Generate a personalized cover letter
+7. **Date fields**: Format dates properly (MM/YYYY, YYYY-MM-DD, etc.)
+8. **Number fields**: Extract years of experience, salary expectations, etc.
+9. **Select/Radio fields**: Choose the most appropriate option from available choices
+
+IMPORTANT RULES:
+- Always use specific, accurate data from the resume
+- Format values appropriately for each field type
+- For select/radio fields, choose the closest matching option
+- For text areas, provide comprehensive but concise information
+- For cover letters, make them personalized and job-specific
+- If no relevant data exists, leave the field empty or use "N/A"
+- Be conservative - only fill fields you're confident about
+
+Output JSON with this structure:
+{
+  "mappings": [
+    {
+      "fieldSelector": "#full-name",
+      "fieldLabel": "Full Name",
+      "fieldType": "text",
+      "mappedValue": "John Wright",
+      "confidence": 0.95,
+      "reasoning": "Extracted full name from resume header"
+    }
+  ]
+}
+
+The confidence should be 0-1, where 1 is completely confident.`
+
+  try {
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
+    
+    const result = await model.generateContent(prompt)
+    const response = await result.response
+    const text = response.text()
+
+    console.log('Raw Gemini field mapping response:', text)
+
+    // Clean up the response text to extract JSON
+    let jsonText = text.trim()
+    
+    // Remove markdown code blocks if present
+    if (jsonText.startsWith('```json')) {
+      jsonText = jsonText.replace(/^```json\s*/, '').replace(/\s*```$/, '')
+    } else if (jsonText.startsWith('```')) {
+      jsonText = jsonText.replace(/^```\s*/, '').replace(/\s*```$/, '')
+    }
+    
+    // Extract JSON object using regex
+    const jsonMatch = jsonText.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) {
+      throw new Error('No JSON object found in response')
+    }
+    
+    const parsed = JSON.parse(jsonMatch[0])
+    
+    if (!parsed.mappings || !Array.isArray(parsed.mappings)) {
+      throw new Error('Invalid response format: missing mappings array')
+    }
+
+    return {
+      success: true,
+      mappings: parsed.mappings
+    }
+
+  } catch (error) {
+    console.error('Error generating field mappings:', error)
+    return {
+      success: false,
+      mappings: [],
+      error: error instanceof Error ? error.message : 'Failed to generate field mappings'
+    }
+  }
 }
 
 export async function generateCoverLetter(

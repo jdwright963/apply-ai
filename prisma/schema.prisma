@@ -48,6 +48,7 @@ model User {
   image         String?
   resumeText    String?
   resumeData    Json?          // Structured resume data
+  preferences   Json?          // User preferences for common form fields
   accounts      Account[]
   sessions      Session[]
   applications  Application[]

@@ -196,6 +196,238 @@ const SUBMIT_PATTERNS = [
   '[role="button"]:has-text("Apply")',
 ]
 
+export interface DetailedFormField {
+  selector: string
+  type: 'input' | 'textarea' | 'select' | 'checkbox' | 'radio'
+  inputType?: string // text, email, tel, password, etc.
+  name?: string
+  id?: string
+  placeholder?: string
+  label?: string
+  required?: boolean
+  value?: string
+  options?: string[] // For select/radio fields
+  description?: string // Additional context about the field
+}
+
+export interface DetailedFormInfo {
+  url: string
+  pageTitle: string
+  fields: DetailedFormField[]
+  submitButton?: {
+    selector: string
+    text: string
+  }
+  detectedAt: Date
+}
+
+export interface DetailedFormDetectionResult {
+  success: boolean
+  data?: DetailedFormInfo
+  error?: string
+}
+
+export async function scrapeDetailedFormFields(url: string): Promise<DetailedFormDetectionResult> {
+  let browser: Browser | null = null
+  
+  try {
+    browser = await chromium.launch({ 
+      headless: false, // Visible for debugging
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    })
+    
+    const page = await browser.newPage()
+    
+    // Navigate to the page
+    await page.goto(url, { 
+      waitUntil: 'domcontentloaded',
+      timeout: 30000 
+    })
+    
+    // Wait for content to load
+    await page.waitForTimeout(2000)
+    
+    // Try to find and click "Apply" buttons to get to the actual application form
+    const applyButtonSelectors = [
+      'button:has-text("Apply")', 'a:has-text("Apply")',
+      'button:has-text("Apply Now")', 'a:has-text("Apply Now")',
+      'button:has-text("Easy Apply")', 'a:has-text("Easy Apply")',
+      'button:has-text("Submit Application")', 'a:has-text("Submit Application")',
+      'button:has-text("Apply for this job")', 'a:has-text("Apply for this job")',
+      '[data-testid*="apply"]', '[class*="apply"]',
+      'button[aria-label*="apply" i]', 'a[aria-label*="apply" i]',
+    ]
+    
+    let foundApplyButton = false
+    for (const selector of applyButtonSelectors) {
+      try {
+        const applyButton = await page.locator(selector).first()
+        if (await applyButton.isVisible()) {
+          console.log(`Found apply button with selector: ${selector}`)
+          await applyButton.click()
+          await page.waitForTimeout(3000) // Wait for navigation or form to load
+          const currentUrl = page.url()
+          if (currentUrl !== url) {
+            console.log(`Navigated to application page: ${currentUrl}`)
+          }
+          foundApplyButton = true
+          break
+        }
+      } catch (e) {
+        continue
+      }
+    }
+    
+    if (!foundApplyButton) {
+      console.log('No apply button found, proceeding with current page')
+    }
+    
+    await page.waitForTimeout(2000) // Wait a bit more for any dynamic content to load
+    
+    const fields: DetailedFormField[] = []
+    
+    // Get all form elements
+    const formElements = await page.locator('input, textarea, select').all()
+    
+    for (const element of formElements) {
+      try {
+        const isVisible = await element.isVisible()
+        if (!isVisible) continue
+        
+        const tagName = await element.evaluate(el => el.tagName.toLowerCase())
+        const type = await element.getAttribute('type') || 'text'
+        const name = await element.getAttribute('name') || ''
+        const id = await element.getAttribute('id') || ''
+        const placeholder = await element.getAttribute('placeholder') || ''
+        const required = await element.getAttribute('required') !== null
+        const value = await element.getAttribute('value') || ''
+        
+        // Get label text
+        let label = ''
+        try {
+          if (id) {
+            const labelElement = await page.locator(`label[for="${id}"]`).first()
+            if (await labelElement.isVisible()) {
+              label = await labelElement.textContent() || ''
+            }
+          }
+          
+          if (!label) {
+            // Try parent label
+            const parentLabel = await element.locator('xpath=..').locator('label').first()
+            if (await parentLabel.isVisible()) {
+              label = await parentLabel.textContent() || ''
+            }
+          }
+          
+          if (!label) {
+            // Try previous sibling label
+            const prevLabel = await element.locator('xpath=preceding-sibling::label[1]').first()
+            if (await prevLabel.isVisible()) {
+              label = await prevLabel.textContent() || ''
+            }
+          }
+        } catch (e) {
+          // Ignore label errors
+        }
+        
+        // Get options for select/radio fields
+        let options: string[] = []
+        if (tagName === 'select') {
+          const optionElements = await element.locator('option').all()
+          for (const option of optionElements) {
+            const optionText = await option.textContent()
+            if (optionText && optionText.trim()) {
+              options.push(optionText.trim())
+            }
+          }
+        }
+        
+        // Generate selector
+        let selector = ''
+        if (id) {
+          selector = `#${id}`
+        } else if (name) {
+          selector = `[name="${name}"]`
+        } else {
+          selector = `${tagName}[type="${type}"]`
+        }
+        
+        fields.push({
+          selector,
+          type: tagName as any,
+          inputType: type,
+          name,
+          id,
+          placeholder: placeholder.trim(),
+          label: label.trim(),
+          required,
+          value: value.trim(),
+          options,
+          description: `${label || placeholder || name || 'Field'} (${type})`
+        })
+        
+        console.log(`Detected field: ${label || placeholder || name} (${tagName}[${type}])`)
+      } catch (e) {
+        continue
+      }
+    }
+    
+    // Find submit button
+    let submitButton: { selector: string; text: string } | undefined
+    const submitSelectors = [
+      'button[type="submit"]',
+      'input[type="submit"]',
+      'button:has-text("Submit")',
+      'button:has-text("Apply")',
+      'button:has-text("Send")',
+      'button:has-text("Continue")',
+      'button:has-text("Next")',
+    ]
+    
+    for (const selector of submitSelectors) {
+      try {
+        const button = await page.locator(selector).first()
+        if (await button.isVisible()) {
+          const text = await button.textContent() || ''
+          submitButton = { selector, text: text.trim() }
+          break
+        }
+      } catch (e) {
+        continue
+      }
+    }
+    
+    const pageTitle = await page.title()
+    
+    console.log(`Detailed form detection complete: ${fields.length} fields detected`)
+    console.log(`Current URL: ${page.url()}`)
+    console.log(`Page title: ${pageTitle}`)
+    
+    return {
+      success: true,
+      data: {
+        url: page.url(),
+        pageTitle,
+        fields,
+        submitButton,
+        detectedAt: new Date(),
+      },
+    }
+    
+  } catch (error) {
+    console.error('Error detecting detailed form fields:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to detect form fields',
+    }
+  } finally {
+    if (browser) {
+      // browser.close() // Keep browser open for manual review
+    }
+  }
+}
+
 export async function detectFormFields(url: string): Promise<FormDetectionResult> {
   let browser: Browser | null = null
   
