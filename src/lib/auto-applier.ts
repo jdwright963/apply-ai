@@ -293,7 +293,7 @@ async function handleFileUpload(page: Page) {
 
 // Form scraping and matching functions
 async function scrapeFormFields(page: Page): Promise<FormField[]> {
-  console.log('🔍 Scraping ALL form fields and text elements from DOM...')
+  console.log('🔍 Scraping form fields from DOM...')
   
   const formFields = await page.evaluate(() => {
     const fields: any[] = []
@@ -309,102 +309,22 @@ async function scrapeFormFields(page: Page): Promise<FormField[]> {
       const id = element.getAttribute('id') || ''
       const placeholder = element.getAttribute('placeholder') || ''
       const className = element.getAttribute('class') || ''
+      const value = element.getAttribute('value') || ''
       
       // Skip hidden fields
       if (type === 'hidden') return
-      
-      // Find ALL associated text (main question + helper text)
-      const allTexts: string[] = []
-      
-      // Strategy 1: Input inside label
-      const labelElement = element.closest('label')
-      if (labelElement) {
-        const labelText = labelElement.textContent?.trim() || ''
-        if (labelText) allTexts.push(labelText)
-      }
-      
-      // Strategy 2: Label with 'for' attribute pointing to this input
-      if (id) {
-        const forLabel = document.querySelector(`label[for="${id}"]`)
-        if (forLabel) {
-          const forLabelText = forLabel.textContent?.trim() || ''
-          if (forLabelText) allTexts.push(forLabelText)
-        }
-      }
-      
-      // Strategy 3: Look for ALL text in parent container
-      const parent = element.parentElement
-      if (parent) {
-        // Get all text nodes in parent
-        const textNodes = Array.from(parent.childNodes)
-          .filter(node => node.nodeType === Node.TEXT_NODE)
-          .map(node => node.textContent?.trim())
-          .filter((text): text is string => text !== undefined && text.length > 0)
-        
-        allTexts.push(...textNodes)
-        
-        // Also get text from child elements
-        const childElements = parent.querySelectorAll('h1, h2, h3, h4, h5, h6, p, div, span, label')
-        childElements.forEach(child => {
-          const childText = child.textContent?.trim()
-          if (childText && childText.length > 0) {
-            allTexts.push(childText)
-          }
-        })
-      }
-      
-      // Strategy 4: Look for previous siblings
-      let sibling = element.previousElementSibling
-      while (sibling) {
-        const siblingText = sibling.textContent?.trim()
-        if (siblingText && siblingText.length > 0) {
-          allTexts.push(siblingText)
-        }
-        
-        // Also check child elements of siblings
-        const siblingChildren = sibling.querySelectorAll('h1, h2, h3, h4, h5, h6, p, div, span, label')
-        siblingChildren.forEach(child => {
-          const childText = child.textContent?.trim()
-          if (childText && childText.length > 0) {
-            allTexts.push(childText)
-          }
-        })
-        
-        sibling = sibling.previousElementSibling
-      }
-      
-      // Strategy 5: Look for parent containers (for radio button groups)
-      let container = element.parentElement
-      while (container && container !== document.body) {
-        // Check if this container has a question-like text
-        const containerText = container.textContent?.trim()
-        if (containerText && containerText.includes('?')) {
-          allTexts.push(containerText)
-        }
-        
-        // Check for headings or labels in this container
-        const headings = container.querySelectorAll('h1, h2, h3, h4, h5, h6, label')
-        headings.forEach(heading => {
-          const headingText = heading.textContent?.trim()
-          if (headingText && headingText.length > 0) {
-            allTexts.push(headingText)
-          }
-        })
-        
-        container = container.parentElement
-      }
-      
-      // Remove duplicates and clean up
-      const uniqueTexts = [...new Set(allTexts)]
-        .map(text => text.replace(/\s+/g, ' ').trim())
-        .filter(text => text.length > 0)
       
       // Generate selector
       let selector = ''
       if (id) {
         selector = `#${id}`
       } else if (name) {
-        selector = `${tagName}[name="${name}"]`
+        // For radio buttons and checkboxes, include value in selector for specificity
+        if ((type === 'radio' || type === 'checkbox') && value) {
+          selector = `input[name="${name}"][value="${value}"]`
+        } else {
+          selector = `${tagName}[name="${name}"]`
+        }
       } else {
         selector = `${tagName}:nth-of-type(${index + 1})`
       }
@@ -417,7 +337,7 @@ async function scrapeFormFields(page: Page): Promise<FormField[]> {
         id,
         placeholder,
         className,
-        allTexts: uniqueTexts,
+        value,
         isVisible: element.offsetParent !== null
       })
     })
@@ -428,7 +348,6 @@ async function scrapeFormFields(page: Page): Promise<FormField[]> {
   // Log found fields
   formFields.forEach((field, index) => {
     console.log(`📍 Field ${index + 1}: ${field.name || field.id || 'unnamed'} (${field.type}) - Selector: ${field.selector}`)
-    console.log(`   📝 All texts: ${field.allTexts.join(' | ')}`)
   })
   
   return formFields
@@ -443,6 +362,6 @@ interface FormField {
   id: string
   placeholder: string
   className: string
-  allTexts: string[]
+  value: string
   isVisible: boolean
 }
