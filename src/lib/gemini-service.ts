@@ -121,7 +121,7 @@ For each field you can identify, provide:
 - fieldDescription: What the field is asking for
 - action: "fill" for text inputs, "click" for radio/checkbox, "select" for dropdowns
 - value: The exact value to enter or option to select
-- selector: CSS selector to target the field (if you can determine it)
+- labelText: The exact text of the label for this field (as it appears in the screenshot)
 - reasoning: Why this value is appropriate
 - confidence: 0-1 confidence score
 
@@ -139,7 +139,7 @@ Output JSON with this structure:
       "fieldDescription": "Full Name text input",
       "action": "fill",
       "value": "John Wright",
-      "selector": "input[name='fullName']",
+      "labelText": "Full Name *",
       "reasoning": "Extracted full name from resume header",
       "confidence": 0.95
     },
@@ -147,7 +147,7 @@ Output JSON with this structure:
       "fieldDescription": "Cover Letter textarea",
       "action": "fill",
       "value": "[COVER_LETTER_FROM_DATABASE]",
-      "selector": "textarea[name='coverLetter']",
+      "labelText": "Cover Letter",
       "reasoning": "Fill with the generated cover letter from the database",
       "confidence": 0.9
     },
@@ -155,7 +155,7 @@ Output JSON with this structure:
       "fieldDescription": "Work authorization radio buttons",
       "action": "click", 
       "value": "Yes",
-      "selector": "input[value='Yes'][name='authorization']",
+      "labelText": "Are you authorized to work in the United States without sponsorship? *",
       "reasoning": "User preference indicates authorized to work in US",
       "confidence": 0.9
     }
