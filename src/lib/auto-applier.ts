@@ -57,15 +57,15 @@ export async function autoApplyToJob(
     console.log(`📷 Captured ${screenshots.length} screenshot(s)`)
     
     console.log('📝 Scraping actual form fields...')
-    const formFields = await scrapeFormFields(page)
-    console.log(`🔍 Found ${formFields.length} form fields on page`)
+    const formStructure = await scrapeFormFields(page)
+    console.log(`🔍 Found ${formStructure.questions.length} questions on page`)
     
     console.log('🤖 Analyzing form with Gemini Vision...')
     const analysisResult = await analyzeFormScreenshots(
       screenshots,
       options.resumeText,
       options.jobDescription,
-      formFields,
+      formStructure,
       options.userPreferences,
       options.coverLetter
     )
@@ -292,76 +292,276 @@ async function handleFileUpload(page: Page) {
 }
 
 // Form scraping and matching functions
-async function scrapeFormFields(page: Page): Promise<FormField[]> {
-  console.log('🔍 Scraping form fields from DOM...')
+async function scrapeFormFields(page: Page): Promise<FormStructure> {
+  console.log('🔍 Scraping form fields with hierarchical structure...')
   
-  const formFields = await page.evaluate(() => {
-    const fields: any[] = []
+  const formStructure = await page.evaluate(() => {
+    const questions: any[] = []
     
-    // Find all form inputs
-    const inputs = document.querySelectorAll('input, textarea, select')
-    
-    inputs.forEach((input, index) => {
-      const element = input as HTMLElement
-      const tagName = element.tagName.toLowerCase()
-      const type = element.getAttribute('type') || 'text'
-      const name = element.getAttribute('name') || ''
-      const id = element.getAttribute('id') || ''
-      const placeholder = element.getAttribute('placeholder') || ''
-      const className = element.getAttribute('class') || ''
-      const value = element.getAttribute('value') || ''
-      
-      // Skip hidden fields
-      if (type === 'hidden') return
-      
-      // Generate selector
-      let selector = ''
-      if (id) {
-        selector = `#${id}`
-      } else if (name) {
-        // For radio buttons and checkboxes, include value in selector for specificity
-        if ((type === 'radio' || type === 'checkbox') && value) {
-          selector = `input[name="${name}"][value="${value}"]`
-        } else {
-          selector = `${tagName}[name="${name}"]`
+    // Helper function to find question text for a container
+    function findQuestionText(container: HTMLElement): string {
+      // Look for headings (h1-h6) in the container
+      const heading = container.querySelector('h1, h2, h3, h4, h5, h6')
+      if (heading) {
+        const headingText = heading.textContent?.trim()
+        if (headingText && headingText.length > 0) {
+          return headingText
         }
-      } else {
-        selector = `${tagName}:nth-of-type(${index + 1})`
       }
       
-      fields.push({
-        selector,
-        tagName,
-        type,
-        name,
-        id,
-        placeholder,
-        className,
-        value,
-        isVisible: element.offsetParent !== null
+      // Look for spans with common question classes
+      const questionSpan = container.querySelector('span.ng-binding, span.question-text, span.field-label')
+      if (questionSpan) {
+        const spanText = questionSpan.textContent?.trim()
+        if (spanText && spanText.length > 0) {
+          return spanText
+        }
+      }
+      
+      // Look for divs with question classes
+      const questionDiv = container.querySelector('div.question-title, div.field-title, div.label')
+      if (questionDiv) {
+        const divText = questionDiv.textContent?.trim()
+        if (divText && divText.length > 0) {
+          return divText
+        }
+      }
+      
+      return ''
+    }
+    
+    // Helper function to find helper text
+    function findHelperText(container: HTMLElement): string {
+      const helpText = container.querySelector('.question-body, .help-text, .description, .field-description, .form-help')
+      if (helpText) {
+        const helpTextContent = helpText.textContent?.trim()
+        if (helpTextContent && helpTextContent.length > 0) {
+          return helpTextContent
+        }
+      }
+      return ''
+    }
+    
+    // Helper function to generate better selectors for grouped inputs
+    function generateSelector(input: HTMLElement, questionType: string): string {
+      const name = input.getAttribute('name') || ''
+      const id = input.getAttribute('id') || ''
+      const type = input.getAttribute('type') || 'text'
+      const value = input.getAttribute('value') || ''
+      
+      // For radio buttons, include value in selector
+      if (type === 'radio' && value) {
+        return `input[name="${name}"][value="${value}"]`
+      }
+      
+      // For checkboxes with same name, use text-based selector
+      if (type === 'checkbox' && name) {
+        // Find the label text for this checkbox
+        const labelElement = input.parentElement?.querySelector('span.ng-binding, label')
+        if (labelElement) {
+          const labelText = labelElement.textContent?.trim()
+          if (labelText) {
+            // Use a more specific selector that includes the label text
+            return `li.option:has-text("${labelText}") input[type="checkbox"]`
+          }
+        }
+        // Fallback to name + value if available
+        if (value) {
+          return `input[name="${name}"][value="${value}"]`
+        }
+        return `input[name="${name}"]`
+      }
+      
+      // For other inputs, use standard selectors
+      if (id) {
+        return `#${id}`
+      } else if (name) {
+        return `input[name="${name}"], textarea[name="${name}"], select[name="${name}"]`
+      }
+      
+      return ''
+    }
+    
+    // Find all question containers
+    // Look for common patterns: divs with question classes, li.question, etc.
+    const questionContainers = document.querySelectorAll(`
+      li.question,
+      div.question,
+      div.field-group,
+      div.form-group,
+      div.multiplechoice,
+      div.singlechoice,
+      div.text-question,
+      div.checkbox-group,
+      div.radio-group
+    `)
+    
+    questionContainers.forEach((container) => {
+      const containerElement = container as HTMLElement
+      
+      // Skip if container is not visible
+      if (containerElement.offsetParent === null) return
+      
+      // Find question text
+      const questionText = findQuestionText(containerElement)
+      if (!questionText) return
+      
+      // Find helper text
+      const helperText = findHelperText(containerElement)
+      
+      // Find all inputs in this container
+      const inputs = containerElement.querySelectorAll('input, textarea, select')
+      if (inputs.length === 0) return
+      
+      // Determine question type based on input types
+      let questionType: string = 'text'
+      const inputTypes = Array.from(inputs).map(input => input.getAttribute('type') || 'text')
+      
+      if (inputTypes.includes('radio')) {
+        questionType = 'radio'
+      } else if (inputTypes.includes('checkbox')) {
+        questionType = 'checkbox'
+      } else if (inputTypes.includes('text') || inputTypes.includes('email') || inputTypes.includes('tel')) {
+        questionType = 'text'
+      } else if (containerElement.querySelector('textarea')) {
+        questionType = 'textarea'
+      } else if (containerElement.querySelector('select')) {
+        questionType = 'select'
+      }
+      
+      // Create fields for this question
+      const fields: any[] = []
+      
+      inputs.forEach((input) => {
+        const inputElement = input as HTMLElement
+        const type = inputElement.getAttribute('type') || 'text'
+        
+        // Skip hidden fields
+        if (type === 'hidden') return
+        
+        // Generate selector
+        const selector = generateSelector(inputElement, questionType)
+        if (!selector) return
+        
+        // Find label text for this specific input
+        let labelText = ''
+        
+        // For radio/checkbox, get the specific option text
+        if (type === 'radio' || type === 'checkbox') {
+          const labelElement = inputElement.parentElement?.querySelector('span.ng-binding, label')
+          if (labelElement) {
+            labelText = labelElement.textContent?.trim() || ''
+          }
+        } else {
+          // For text inputs, use the question text as label
+          labelText = questionText
+        }
+        
+        if (labelText) {
+          fields.push({
+            selector,
+            type,
+            label: labelText,
+            value: inputElement.getAttribute('value') || undefined
+          })
+        }
+      })
+      
+      if (fields.length > 0) {
+        questions.push({
+          questionText,
+          questionType,
+          helperText: helperText || undefined,
+          fields
+        })
+      }
+    })
+    
+    // Handle standalone inputs that weren't captured in question containers
+    const allInputs = document.querySelectorAll('input, textarea, select')
+    const processedInputs = new Set()
+    
+    // Mark inputs that were already processed
+    questions.forEach((question: any) => {
+      question.fields.forEach((field: any) => {
+        processedInputs.add(field.selector)
       })
     })
     
-    return fields
+    allInputs.forEach((input) => {
+      const inputElement = input as HTMLElement
+      const type = inputElement.getAttribute('type') || 'text'
+      
+      if (type === 'hidden') return
+      
+      const selector = generateSelector(inputElement, type)
+      if (processedInputs.has(selector)) return
+      
+      // Try to find a label for standalone inputs
+      let labelText = ''
+      const id = inputElement.getAttribute('id')
+      if (id) {
+        const label = document.querySelector(`label[for="${id}"]`)
+        if (label) {
+          labelText = label.textContent?.trim() || ''
+        }
+      }
+      
+      // Fallback to placeholder or name
+      if (!labelText) {
+        labelText = inputElement.getAttribute('placeholder') || 
+                   inputElement.getAttribute('name') || 
+                   'Unnamed field'
+      }
+      
+      if (labelText) {
+        questions.push({
+          questionText: labelText,
+          questionType: type === 'textarea' ? 'textarea' : 'text',
+          fields: [{
+            selector,
+            type,
+            label: labelText,
+            value: inputElement.getAttribute('value') || undefined
+          }]
+        })
+      }
+    })
+    
+    return { questions }
   })
   
-  // Log found fields
-  formFields.forEach((field, index) => {
-    console.log(`📍 Field ${index + 1}: ${field.name || field.id || 'unnamed'} (${field.type}) - Selector: ${field.selector}`)
+  // Log the hierarchical structure
+  formStructure.questions.forEach((question, index) => {
+    console.log(`📋 Question ${index + 1}: "${question.questionText}" (${question.questionType})`)
+    if (question.helperText) {
+      console.log(`   Helper: "${question.helperText}"`)
+    }
+    question.fields.forEach((field: any, fieldIndex: number) => {
+      console.log(`   Field ${fieldIndex + 1}: ${field.label} (${field.type})`)
+      console.log(`     Selector: ${field.selector}`)
+    })
+    console.log('')
   })
   
-  return formFields
+  return formStructure
 }
 
 // Types
 interface FormField {
   selector: string
-  tagName: string
   type: string
-  name: string
-  id: string
-  placeholder: string
-  className: string
-  value: string
-  isVisible: boolean
+  label: string
+  value?: string
+}
+
+interface FormQuestion {
+  questionText: string
+  questionType: 'text' | 'radio' | 'checkbox' | 'select' | 'textarea'
+  helperText?: string
+  fields: FormField[]
+}
+
+interface FormStructure {
+  questions: FormQuestion[]
 }

@@ -79,7 +79,7 @@ export async function analyzeFormScreenshots(
   screenshots: Buffer[],
   resumeText: string,
   jobDescription: string,
-  formFields: any[],
+  formStructure: any,
   userPreferences?: any,
   coverLetter?: string
 ): Promise<FormAnalysisResult> {
@@ -97,30 +97,40 @@ ${userPreferences ? JSON.stringify(userPreferences, null, 2) : 'No user preferen
 COVER LETTER:
 ${coverLetter || 'No cover letter provided'}
 
-AVAILABLE FORM FIELDS AND THEIR SELECTORS:
-${JSON.stringify(formFields, null, 2)}
+AVAILABLE FORM QUESTIONS AND THEIR FIELDS:
+${JSON.stringify(formStructure, null, 2)}
 
 TASK: Look at these screenshot(s) of a job application form and tell me exactly how to fill out each field using the EXACT SELECTORS provided above.
 
 IMPORTANT RULES:
-1. **Use Exact Selectors**: You MUST use the exact CSS selectors from the formFields data above
-2. **Be Specific**: Use exact values from the resume (names, dates, numbers, etc.)
-3. **Use User Preferences**: For common questions (gender, race, salary, work authorization, etc.), use the user's preferred values
-4. **Match Field Types**: 
+1. **Use Hierarchical Structure**: Each question has a main questionText, questionType, optional helperText, and associated fields
+2. **Use Semantic Matching**: Match questions semantically based on their questionText and helperText, not by position!
+3. **Use Exact Selectors**: You MUST use the exact CSS selectors from the fields data above
+4. **Be Specific**: Use exact values from the resume (names, dates, numbers, etc.)
+5. **Use User Preferences**: For common questions (gender, race, salary, work authorization, etc.), use the user's preferred values
+6. **Match Field Types**: 
    - Text inputs: Fill with appropriate text
    - Radio buttons: Click the correct option
    - Checkboxes: Check relevant boxes
    - Dropdowns: Select the best option
-5. **Handle Complex Fields**:
+7. **Handle Complex Fields**:
    - Salary: Use user's salary expectations or realistic ranges based on experience level
    - Years of experience: Calculate from resume dates
    - Skills: Select relevant technologies from resume
    - Location: Use user's current location or "Remote" if applicable
    - Work authorization: Use user's preference
    - Gender/Race: Use user's preferences (respect privacy choices)
-6. **Cover Letter Field**: Look for cover letter text areas and provide instructions to fill them with the provided cover letter
-7. **Be Conservative**: Only fill fields you're confident about
-8. **Format Appropriately**: Use proper formats for dates, phone numbers, etc.
+8. **Cover Letter Field**: Look for cover letter text areas and provide instructions to fill them with the provided cover letter
+9. **Be Conservative**: Only fill fields you're confident about
+10. **Format Appropriately**: Use proper formats for dates, phone numbers, etc.
+
+SEMANTIC MATCHING STRATEGY:
+- Read the questionText to understand what the question is asking for
+- Use helperText for additional clues about expected input
+- For grouped fields (radio/checkbox), understand that each field represents an option for the main question
+- Match semantically: "What are your salary expectations?" → use salary data from user preferences
+- Match semantically: "How did you hear about us?" → use appropriate response like "LinkedIn" or "Company Website"
+- Match semantically: "Are you authorized to work in the US?" → use user's work authorization preference
 
 For each field you want to fill, provide:
 - fieldDescription: What the field is asking for
