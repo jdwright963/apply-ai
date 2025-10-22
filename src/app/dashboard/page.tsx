@@ -69,32 +69,28 @@ export default function Dashboard() {
   }
 
   const handleUrlsChange = async (urls: string[]) => {
-    // Add each URL as a new application immediately
+    // Add each URL as a new application with proper job scraping
     for (const url of urls) {
       if (url.trim()) {
         try {
-          const response = await fetch('/api/application/create', {
+          const response = await fetch('/api/job/analyze', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
               url: url.trim(),
-              company: 'Analyzing...',
-              title: 'Analyzing...',
-              fitScore: 0,
-              coverLetter: '',
             }),
           })
 
           if (!response.ok) {
             const error = await response.json()
-            throw new Error(error.error || 'Failed to create application')
+            throw new Error(error.error || 'Failed to analyze job posting')
           }
 
-          console.log('Application created successfully for URL:', url)
+          console.log('Job analyzed and application created successfully for URL:', url)
         } catch (error) {
-          console.error('Error creating application for URL:', url, error)
+          console.error('Error analyzing job posting for URL:', url, error)
         }
       }
     }
