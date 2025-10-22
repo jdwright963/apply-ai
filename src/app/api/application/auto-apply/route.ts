@@ -40,15 +40,23 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'No resume data found. Please upload a resume first.' }, { status: 400 })
     }
 
+    if (!application.user.resumeText) {
+      console.error('No raw resume text found for user:', application.user.id)
+      return NextResponse.json({ error: 'No raw resume text found. Please upload a resume first.' }, { status: 400 })
+    }
+
     console.log('Starting auto-apply process...')
 
     // Auto-apply to the job
     const result = await autoApplyToJob(application.url, {
       resumeData: application.user.resumeData as any,
+      resumeText: application.user.resumeText, // Add raw resume text
       jobDescription: application.description || '',
       jobTitle: application.title || 'Unknown Title',
       company: application.company || 'Unknown Company',
       reviewBeforeSubmit: reviewBeforeSubmit || false,
+      userPreferences: application.user.preferences, // Add user preferences
+      coverLetter: application.coverLetter, // Add cover letter from database
     })
 
     console.log('Auto-apply result:', {

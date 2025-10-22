@@ -5,11 +5,10 @@ import { useSession, signOut } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { UploadResumeCard } from '@/components/upload-resume-card'
 import { JobUrlsCard } from '@/components/job-urls-card'
-import { GenerateApplyButton } from '@/components/generate-apply-button'
 import { JobsTable, type JobApplication } from '@/components/jobs-table'
-import { HumanifyToggle } from '@/components/humanify-toggle'
 import { CoverLetterModal } from '@/components/cover-letter-modal'
 import { ApplicationPreviewModal } from '@/components/application-preview-modal'
+import { UserPreferencesCard } from '@/components/user-preferences-card'
 import { Button } from '@/components/ui/button'
 import { LogOut, User } from 'lucide-react'
 import { api } from '@/utils/api'
@@ -48,9 +47,6 @@ export default function Dashboard() {
   const { data: applications, refetch: refetchApplications } = api.application.getAll.useQuery()
   const { data: resumeData } = api.resume.get.useQuery()
   
-  // tRPC mutations
-  const createApplication = api.application.create.useMutation()
-  
   // Debug logging
   console.log('Applications data:', applications)
   console.log('Applications type:', typeof applications)
@@ -72,8 +68,38 @@ export default function Dashboard() {
     // Resume is already saved to database via REST API route
   }
 
-  const handleUrlsChange = (urls: string[]) => {
-    setJobUrls(urls)
+  const handleUrlsChange = async (urls: string[]) => {
+    // Add each URL as a new application with proper job scraping
+    for (const url of urls) {
+      if (url.trim()) {
+        try {
+          const response = await fetch('/api/job/analyze', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              url: url.trim(),
+            }),
+          })
+
+          if (!response.ok) {
+            const error = await response.json()
+            throw new Error(error.error || 'Failed to analyze job posting')
+          }
+
+          console.log('Job analyzed and application created successfully for URL:', url)
+        } catch (error) {
+          console.error('Error analyzing job posting for URL:', url, error)
+        }
+      }
+    }
+    
+    // Refresh the applications list to show the new entries
+    await refetchApplications()
+    
+    // Clear the jobUrls state since we're now managing them in the database
+    setJobUrls([])
   }
 
   const handleMarkAsApplied = async () => {
@@ -114,93 +140,6 @@ export default function Dashboard() {
       jobTitle: '',
       company: ''
     })
-  }
-
-  const analyzeJobPostingViaAPI = async (url: string) => {
-    console.log('Analyzing job posting via API:', url)
-    
-    const response = await fetch('/api/job/analyze', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ url }),
-    })
-
-    console.log('Job analysis response status:', response.status)
-
-    if (!response.ok) {
-      const error = await response.json()
-      console.error('Job analysis error:', error)
-      throw new Error(error.error || 'Failed to analyze job posting')
-    }
-
-    const result = await response.json()
-    console.log('Job analysis successful:', result.success)
-    return result
-  }
-
-  const generateCoverLetterViaAPI = async (applicationId: string) => {
-    const response = await fetch('/api/cover-letter/generate', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ applicationId }),
-    })
-
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.error || 'Failed to generate cover letter')
-    }
-
-    return response.json()
-  }
-
-  const handleGenerateAndApply = async () => {
-    if ((!resumeText && !resumeData?.hasResume) || jobUrls.length === 0) return
-
-    try {
-      // Analyze and scrape each job posting via REST API
-      const promises = jobUrls.map(async (url) => {
-        try {
-          // Use REST API for job analysis to avoid tRPC size limits
-          const result = await analyzeJobPostingViaAPI(url)
-          
-          // Generate cover letter via REST API to avoid tRPC size limits
-          if (result.application?.id) {
-            try {
-              await generateCoverLetterViaAPI(result.application.id)
-            } catch (coverLetterError) {
-              console.error('Error generating cover letter:', coverLetterError)
-              // Continue even if cover letter generation fails
-            }
-          }
-          
-          return result
-        } catch (error) {
-          console.error(`Error analyzing job posting ${url}:`, error)
-          // Fallback to basic application creation
-          return createApplication.mutateAsync({
-            url,
-            company: 'Unknown Company',
-            title: 'Unknown Title',
-            fitScore: Math.floor(Math.random() * 40) + 60,
-            coverLetter: `Generated cover letter for job at ${url}`,
-          })
-        }
-      })
-
-      await Promise.all(promises)
-      
-      // Refresh applications list
-      await refetchApplications()
-      
-      // Clear job URLs after successful application
-      setJobUrls([])
-    } catch (error) {
-      console.error('Error creating applications:', error)
-    }
   }
 
   // Convert database applications to component format
@@ -295,22 +234,17 @@ export default function Dashboard() {
             <JobUrlsCard onUrlsChange={handleUrlsChange} />
           </div>
 
-          {/* Humanify Toggle */}
-          <HumanifyToggle initialValue={resumeData?.humanifyMode ?? true} />
-
-          {/* Generate & Apply Button */}
-          <GenerateApplyButton
-            hasResume={!!resumeText || !!resumeData?.hasResume}
-            jobUrls={jobUrls}
-            onGenerateAndApply={handleGenerateAndApply}
-          />
-
           {/* Jobs Table */}
           <JobsTable 
             jobs={jobs} 
             onGenerateCoverLetter={handleOpenCoverLetterModal}
             onAutoApply={handleOpenApplicationPreviewModal}
           />
+        </div>
+
+        {/* User Preferences Section */}
+        <div className="mt-8">
+          <UserPreferencesCard />
         </div>
 
         {/* Cover Letter Modal */}

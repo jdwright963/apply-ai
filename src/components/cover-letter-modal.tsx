@@ -5,8 +5,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Copy, Check, Send, Star } from 'lucide-react'
-import { api } from '@/utils/api'
-
 interface CoverLetterModalProps {
   isOpen: boolean
   onClose: () => void
@@ -29,22 +27,34 @@ export function CoverLetterModal({
   const [coverLetter, setCoverLetter] = useState<string>('')
   const [fitScore, setFitScore] = useState<number>(0)
   const [tone, setTone] = useState<'friendly' | 'formal'>('friendly')
-
-  const generateCoverLetter = api.application.generateCoverLetter.useMutation()
-  const updateApplication = api.application.update.useMutation()
+  const [error, setError] = useState<string | null>(null)
 
   const handleGenerateCoverLetter = async () => {
     setIsGenerating(true)
+    setError(null)
+    
     try {
-      const result = await generateCoverLetter.mutateAsync({
-        applicationId
+      const response = await fetch('/api/cover-letter/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ applicationId }),
       })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate cover letter')
+      }
+
+      const result = await response.json()
       
       setCoverLetter(result.coverLetter)
       setFitScore(result.fitScore)
       setTone(result.tone)
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error generating cover letter:', error)
+      setError(error.message || 'Failed to generate cover letter')
     } finally {
       setIsGenerating(false)
     }
@@ -62,14 +72,27 @@ export function CoverLetterModal({
 
   const handleMarkAsApplied = async () => {
     try {
-      await updateApplication.mutateAsync({
-        id: applicationId,
-        status: 'Applied'
+      const response = await fetch('/api/application/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: applicationId,
+          status: 'Applied'
+        }),
       })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to update application')
+      }
+
       onMarkAsApplied()
       onClose()
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error marking as applied:', error)
+      setError(error.message || 'Failed to mark as applied')
     }
   }
 
@@ -186,10 +209,10 @@ export function CoverLetterModal({
           )}
 
           {/* Error State */}
-          {generateCoverLetter.error && (
+          {error && (
             <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
               <p className="text-red-800 text-sm">
-                {generateCoverLetter.error.message}
+                {error}
               </p>
             </div>
           )}

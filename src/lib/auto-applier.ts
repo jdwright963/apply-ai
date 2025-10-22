@@ -1,7 +1,5 @@
-import { chromium } from 'playwright'
-import { ResumeData } from './gemini-service'
-import { FormField, detectFormFields } from './form-detector'
-import { sleep } from '@/utils/sleep'
+import { chromium, Browser, Page } from 'playwright'
+import { ResumeData, generateCoverLetter, analyzeFormScreenshots, FormFillInstruction } from './gemini-service'
 
 export interface FormSubmissionResult {
   success: boolean
@@ -13,10 +11,13 @@ export interface FormSubmissionResult {
 
 export interface AutoApplyOptions {
   resumeData: ResumeData
+  resumeText: string // Add raw resume text
   jobDescription: string
   jobTitle: string
   company: string
   reviewBeforeSubmit: boolean
+  userPreferences?: any // User preferences for common form fields
+  coverLetter?: string // Cover letter from database
 }
 
 export async function autoApplyToJob(
@@ -26,197 +27,541 @@ export async function autoApplyToJob(
   let browser: Browser | null = null
   
   try {
+    console.log('🚀 Starting auto-apply process...')
+    console.log(`📍 URL: ${url}`)
+    console.log(`👤 Job: ${options.jobTitle} at ${options.company}`)
+    
     browser = await chromium.launch({ 
-      headless: false, // Set to true for production
+      headless: false, // Always visible for user review
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     })
     
     const page = await browser.newPage()
     
-    // Set a realistic user agent
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-    
-    // Navigate to the job application page
+    console.log('🌐 Navigating to job page...')
     await page.goto(url, { 
       waitUntil: 'domcontentloaded',
       timeout: 30000 
     })
     
-    // Wait for page to load
-    await page.waitForTimeout(3000)
+    await page.waitForTimeout(3000) // Wait for page to load
     
-    // Fill form fields
-    await fillFormFields(page, options.resumeData, options)
+    console.log('🔍 Detecting and clicking Apply button...')
+    // Try to find and click Apply button first
+    await clickApplyButton(page)
     
-    // Take screenshot before submission
-    const screenshot = await page.screenshot({ 
-      type: 'png',
-      fullPage: true 
-    })
+    console.log('📝 Auto-filling form fields...')
     
-    if (options.reviewBeforeSubmit) {
-      // Return preview data for review
-      return {
-        success: true,
-        screenshot: screenshot.toString('base64'),
-        finalUrl: page.url(),
-      }
+    console.log('📸 Capturing form screenshots...')
+    const screenshots = await captureFormScreenshots(page)
+    console.log(`📷 Captured ${screenshots.length} screenshot(s)`)
+    
+    console.log('📝 Scraping actual form fields...')
+    const formStructure = await scrapeFormFields(page)
+    console.log(`🔍 Found ${formStructure.questions.length} questions on page`)
+    
+    console.log('🤖 Analyzing form with Gemini Vision...')
+    const analysisResult = await analyzeFormScreenshots(
+      screenshots,
+      options.resumeText,
+      options.jobDescription,
+      formStructure,
+      options.userPreferences,
+      options.coverLetter
+    )
+    
+    if (!analysisResult.success) {
+      throw new Error(analysisResult.error || 'Failed to analyze form screenshots')
     }
     
-    // Submit the form
-    await submitForm(page)
+    console.log(`✅ Generated ${analysisResult.instructions.length} fill instructions`)
     
-    // Wait for submission to complete
-    await page.waitForTimeout(5000)
+    console.log('📝 Filling form fields with Gemini instructions...')
+    await fillFormWithInstructions(page, analysisResult.instructions, options)
     
-    const finalUrl = page.url()
-    const finalScreenshot = await page.screenshot({ 
-      type: 'png',
-      fullPage: true 
-    })
+    console.log('✅ Screenshot-based form filling complete!')
+    console.log('👀 Browser window will stay open for manual review.')
+    console.log('📋 Please review the filled form and submit manually when ready.')
+    console.log('❌ Close the browser window when done.')
     
+    // Don't close the browser - let user review and submit manually
     return {
       success: true,
-      submittedAt: new Date(),
-      screenshot: finalScreenshot.toString('base64'),
-      finalUrl,
+      finalUrl: page.url(),
     }
     
   } catch (error) {
-    console.error('Error in auto-apply:', error)
+    console.error('❌ Error in auto-apply:', error)
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to auto-apply',
     }
-  } finally {
-    if (browser) {
-      await browser.close()
-    }
   }
+  // Note: Browser stays open - user closes it manually
 }
 
-async function fillFormFields(page: Page, resumeData: ResumeData, options: AutoApplyOptions) {
-  // Fill basic personal information
-  await fillField(page, 'input[name*="first"], input[id*="first"]', resumeData.personalInfo.fullName.split(' ')[0] || '')
-  await fillField(page, 'input[name*="last"], input[id*="last"]', resumeData.personalInfo.fullName.split(' ').slice(1).join(' ') || '')
-  await fillField(page, 'input[name*="name"], input[id*="name"]', resumeData.personalInfo.fullName)
-  await fillField(page, 'input[type="email"], input[name*="email"]', resumeData.personalInfo.email || '')
-  await fillField(page, 'input[type="tel"], input[name*="phone"]', resumeData.personalInfo.phone || '')
-  await fillField(page, 'input[name*="location"], input[name*="address"]', resumeData.personalInfo.location || '')
-  await fillField(page, 'input[name*="linkedin"]', resumeData.personalInfo.linkedin || '')
-  await fillField(page, 'input[name*="github"]', resumeData.personalInfo.github || '')
-  await fillField(page, 'input[name*="website"]', resumeData.personalInfo.website || '')
+async function captureFormScreenshots(page: Page): Promise<Buffer[]> {
+  console.log('📸 Starting screenshot capture...')
+  const screenshots: Buffer[] = []
   
-  // Fill experience
-  const experienceText = resumeData.experience
-    .map(exp => `${exp.position} at ${exp.company} (${exp.startDate} - ${exp.endDate || 'Present'})\n${exp.description || ''}`)
-    .join('\n\n')
-  await fillField(page, 'textarea[name*="experience"], textarea[name*="work"]', experienceText)
+  // Scroll to top first
+  await page.evaluate(() => window.scrollTo(0, 0))
+  await page.waitForTimeout(1000)
   
-  // Fill education
-  const educationText = resumeData.education
-    .map(edu => `${edu.degree} in ${edu.field || 'N/A'} from ${edu.institution}${edu.graduationDate ? ` (${edu.graduationDate})` : ''}`)
-    .join('\n')
-  await fillField(page, 'textarea[name*="education"], textarea[name*="degree"]', educationText)
+  // Get viewport height
+  const viewportHeight = await page.evaluate(() => window.innerHeight)
+  const documentHeight = await page.evaluate(() => document.body.scrollHeight)
   
-  // Fill skills
-  const skillsText = resumeData.skills.join(', ')
-  await fillField(page, 'textarea[name*="skill"], textarea[name*="competenc"]', skillsText)
+  console.log(`📏 Viewport height: ${viewportHeight}px, Document height: ${documentHeight}px`)
   
-  // Generate and fill cover letter
-  if (resumeData.personalInfo.email && options.jobDescription) {
+  let currentScroll = 0
+  let screenshotCount = 0
+  
+  while (currentScroll < documentHeight) {
+    console.log(`📷 Taking screenshot ${screenshotCount + 1} at scroll position ${currentScroll}px`)
+    
+    // Take screenshot of current viewport
+    const screenshot = await page.screenshot({ 
+      fullPage: false, // Just viewport
+      type: 'png'
+    })
+    screenshots.push(screenshot)
+    screenshotCount++
+    
+    // Check if there's more content below
+    const remainingHeight = documentHeight - (currentScroll + viewportHeight)
+    if (remainingHeight <= 0) {
+      console.log('✅ Reached end of document')
+      break
+    }
+    
+    // Scroll down by viewport height
+    currentScroll += viewportHeight
+    await page.evaluate((scroll) => window.scrollTo(0, scroll), currentScroll)
+    await page.waitForTimeout(1000) // Let content load
+    
+    // Safety check to prevent infinite loops
+    if (screenshotCount > 10) {
+      console.log('⚠️ Reached maximum screenshot limit (10)')
+      break
+    }
+  }
+  
+  console.log(`✅ Captured ${screenshots.length} screenshot(s)`)
+  return screenshots
+}
+
+async function fillFormWithInstructions(page: Page, instructions: FormFillInstruction[], options: AutoApplyOptions) {
+  console.log('🎯 Filling form with Gemini instructions...')
+  
+  for (const instruction of instructions) {
     try {
-      const coverLetterResult = await generateCoverLetter(
-        JSON.stringify(resumeData),
-        options.jobDescription,
-        options.jobTitle,
-        options.company
-      )
+      const { fieldDescription, action, value, selector, confidence, reasoning } = instruction
       
-      await fillField(page, 'textarea[name*="cover"], textarea[name*="letter"]', coverLetterResult.coverLetter)
+      if (!value || value.trim() === '' || value === 'N/A') {
+        console.log(`⏭️ Skipping empty field: ${fieldDescription}`)
+        continue
+      }
+      
+      if (confidence < 0.5) {
+        console.log(`⚠️ Low confidence (${Math.round(confidence * 100)}%) for ${fieldDescription}: ${reasoning}`)
+        continue
+      }
+      
+      console.log(`🔍 Filling field: ${fieldDescription} using selector: ${selector}`)
+      
+      if (action === 'fill') {
+        // Fill text input
+        const element = await page.locator(selector).first()
+        const isVisible = await element.isVisible()
+        
+        if (isVisible) {
+          try {
+            await element.scrollIntoViewIfNeeded()
+            await page.waitForTimeout(500)
+          } catch (scrollError) {
+            console.log(`⚠️ Could not scroll to element: ${scrollError}`)
+          }
+          
+          await element.clear()
+          
+          // Special handling for cover letter
+          const fillValue = value === '[COVER_LETTER_FROM_DATABASE]' 
+            ? (options.coverLetter || '') 
+            : value
+          
+          await element.fill(fillValue)
+          console.log(`✅ Filled ${fieldDescription} (${Math.round(confidence * 100)}%): ${fillValue.substring(0, 50)}${fillValue.length > 50 ? '...' : ''}`)
+          console.log(`   Reasoning: ${reasoning}`)
+        } else {
+          console.log(`❌ Field not visible: ${fieldDescription} (${selector})`)
+        }
+        
+      } else if (action === 'click') {
+        // Click radio button or checkbox
+        const element = await page.locator(selector).first()
+        const isVisible = await element.isVisible()
+        
+        if (isVisible) {
+          try {
+            await element.scrollIntoViewIfNeeded()
+            await page.waitForTimeout(500)
+          } catch (scrollError) {
+            console.log(`⚠️ Could not scroll to element: ${scrollError}`)
+          }
+          
+          await element.click()
+          console.log(`✅ Clicked ${fieldDescription} (${Math.round(confidence * 100)}%): ${value}`)
+          console.log(`   Reasoning: ${reasoning}`)
+        } else {
+          console.log(`❌ Field not visible: ${fieldDescription} (${selector})`)
+        }
+        
+      } else if (action === 'select') {
+        // Select dropdown option
+        const element = await page.locator(selector).first()
+        const isVisible = await element.isVisible()
+        
+        if (isVisible) {
+          try {
+            await element.scrollIntoViewIfNeeded()
+            await page.waitForTimeout(500)
+          } catch (scrollError) {
+            console.log(`⚠️ Could not scroll to element: ${scrollError}`)
+          }
+          
+          await element.selectOption(value)
+          console.log(`✅ Selected ${fieldDescription} (${Math.round(confidence * 100)}%): ${value}`)
+          console.log(`   Reasoning: ${reasoning}`)
+        } else {
+          console.log(`❌ Field not visible: ${fieldDescription} (${selector})`)
+        }
+      }
+      
     } catch (error) {
-      console.error('Failed to generate cover letter:', error)
+      console.log(`❌ Failed to fill ${instruction.fieldDescription}: ${error}`)
     }
-  }
-  
-  // Handle file uploads (resume)
-  await handleFileUpload(page, resumeData)
-}
-
-async function fillField(page: Page, selector: string, value: string) {
-  if (!value.trim()) return
-  
-  try {
-    const element = await page.locator(selector).first()
-    if (await element.isVisible()) {
-      await element.clear()
-      await element.fill(value)
-      console.log(`Filled field ${selector} with: ${value.substring(0, 50)}...`)
-    }
-  } catch (error) {
-    console.log(`Failed to fill field ${selector}:`, error)
   }
 }
 
-async function handleFileUpload(page: Page, resumeData: ResumeData) {
+async function clickApplyButton(page: Page) {
+  const applyButtonSelectors = [
+    'button:has-text("Apply")',
+    'a:has-text("Apply")',
+    'button:has-text("Apply Now")',
+    'a:has-text("Apply Now")',
+    'button:has-text("Easy Apply")',
+    'a:has-text("Easy Apply")',
+    'button:has-text("Submit Application")',
+    'a:has-text("Submit Application")',
+    'button:has-text("Apply for this job")',
+    'a:has-text("Apply for this job")',
+    '[data-testid*="apply"]',
+    '[class*="apply"]',
+    'button[aria-label*="apply" i]',
+    'a[aria-label*="apply" i]',
+  ]
+  
+  for (const selector of applyButtonSelectors) {
+    try {
+      const applyButton = await page.locator(selector).first()
+      if (await applyButton.isVisible()) {
+        console.log(`🎯 Found apply button: ${selector}`)
+        await applyButton.click()
+        await page.waitForTimeout(3000) // Wait for navigation/form to load
+        console.log('✅ Apply button clicked successfully')
+        return
+      }
+    } catch (e) {
+      continue
+    }
+  }
+  
+  console.log('ℹ️ No apply button found, proceeding with current page')
+}
+
+async function handleFileUpload(page: Page) {
   try {
     const fileInput = await page.locator('input[type="file"]').first()
     if (await fileInput.isVisible()) {
-      // For now, we'll skip file uploads as we need the actual file
-      // In a real implementation, you'd need to provide the resume file path
-      console.log('File upload field detected - skipping for now')
+      console.log('📎 File upload field detected - please upload resume manually')
     }
   } catch (error) {
-    console.log('No file upload field found or error:', error)
+    console.log('ℹ️ No file upload field found')
   }
 }
 
-async function submitForm(page: Page) {
-  try {
-    // Try different submit button selectors
-    const submitSelectors = [
-      'button[type="submit"]',
-      'input[type="submit"]',
-      'button:has-text("Submit")',
-      'button:has-text("Apply")',
-      'button:has-text("Send")',
-      'button:has-text("Continue")',
-      'button:has-text("Next")',
-    ]
+// Form scraping and matching functions
+async function scrapeFormFields(page: Page): Promise<FormStructure> {
+  console.log('🔍 Scraping form fields with hierarchical structure...')
+  
+  const formStructure = await page.evaluate(() => {
+    const questions: any[] = []
     
-    for (const selector of submitSelectors) {
-      try {
-        const button = await page.locator(selector).first()
-        if (await button.isVisible()) {
-          await button.click()
-          console.log(`Clicked submit button: ${selector}`)
-          return
+    // Helper function to find question text for a container
+    function findQuestionText(container: HTMLElement): string {
+      // Look for headings (h1-h6) in the container
+      const heading = container.querySelector('h1, h2, h3, h4, h5, h6')
+      if (heading) {
+        const headingText = heading.textContent?.trim()
+        if (headingText && headingText.length > 0) {
+          return headingText
         }
-      } catch (error) {
-        continue
       }
+      
+      // Look for spans with common question classes
+      const questionSpan = container.querySelector('span.ng-binding, span.question-text, span.field-label')
+      if (questionSpan) {
+        const spanText = questionSpan.textContent?.trim()
+        if (spanText && spanText.length > 0) {
+          return spanText
+        }
+      }
+      
+      // Look for divs with question classes
+      const questionDiv = container.querySelector('div.question-title, div.field-title, div.label')
+      if (questionDiv) {
+        const divText = questionDiv.textContent?.trim()
+        if (divText && divText.length > 0) {
+          return divText
+        }
+      }
+      
+      return ''
     }
     
-    // If no submit button found, try pressing Enter on the last filled field
-    await page.keyboard.press('Enter')
-    console.log('Pressed Enter to submit form')
+    // Helper function to find helper text
+    function findHelperText(container: HTMLElement): string {
+      const helpText = container.querySelector('.question-body, .help-text, .description, .field-description, .form-help')
+      if (helpText) {
+        const helpTextContent = helpText.textContent?.trim()
+        if (helpTextContent && helpTextContent.length > 0) {
+          return helpTextContent
+        }
+      }
+      return ''
+    }
     
-  } catch (error) {
-    console.error('Error submitting form:', error)
-    throw error
-  }
+    // Helper function to generate better selectors for grouped inputs
+    function generateSelector(input: HTMLElement, questionType: string): string {
+      const name = input.getAttribute('name') || ''
+      const id = input.getAttribute('id') || ''
+      const type = input.getAttribute('type') || 'text'
+      const value = input.getAttribute('value') || ''
+      
+      // For radio buttons, include value in selector
+      if (type === 'radio' && value) {
+        return `input[name="${name}"][value="${value}"]`
+      }
+      
+      // For checkboxes with same name, use text-based selector
+      if (type === 'checkbox' && name) {
+        // Find the label text for this checkbox
+        const labelElement = input.parentElement?.querySelector('span.ng-binding, label')
+        if (labelElement) {
+          const labelText = labelElement.textContent?.trim()
+          if (labelText) {
+            // Use a more specific selector that includes the label text
+            return `li.option:has-text("${labelText}") input[type="checkbox"]`
+          }
+        }
+        // Fallback to name + value if available
+        if (value) {
+          return `input[name="${name}"][value="${value}"]`
+        }
+        return `input[name="${name}"]`
+      }
+      
+      // For other inputs, use standard selectors
+      if (id) {
+        return `#${id}`
+      } else if (name) {
+        return `input[name="${name}"], textarea[name="${name}"], select[name="${name}"]`
+      }
+      
+      return ''
+    }
+    
+    // Find all question containers
+    // Look for common patterns: divs with question classes, li.question, etc.
+    const questionContainers = document.querySelectorAll(`
+      li.question,
+      div.question,
+      div.field-group,
+      div.form-group,
+      div.multiplechoice,
+      div.singlechoice,
+      div.text-question,
+      div.checkbox-group,
+      div.radio-group
+    `)
+    
+    questionContainers.forEach((container) => {
+      const containerElement = container as HTMLElement
+      
+      // Skip if container is not visible
+      if (containerElement.offsetParent === null) return
+      
+      // Find question text
+      const questionText = findQuestionText(containerElement)
+      if (!questionText) return
+      
+      // Find helper text
+      const helperText = findHelperText(containerElement)
+      
+      // Find all inputs in this container
+      const inputs = containerElement.querySelectorAll('input, textarea, select')
+      if (inputs.length === 0) return
+      
+      // Determine question type based on input types
+      let questionType: string = 'text'
+      const inputTypes = Array.from(inputs).map(input => input.getAttribute('type') || 'text')
+      
+      if (inputTypes.includes('radio')) {
+        questionType = 'radio'
+      } else if (inputTypes.includes('checkbox')) {
+        questionType = 'checkbox'
+      } else if (inputTypes.includes('text') || inputTypes.includes('email') || inputTypes.includes('tel')) {
+        questionType = 'text'
+      } else if (containerElement.querySelector('textarea')) {
+        questionType = 'textarea'
+      } else if (containerElement.querySelector('select')) {
+        questionType = 'select'
+      }
+      
+      // Create fields for this question
+      const fields: any[] = []
+      
+      inputs.forEach((input) => {
+        const inputElement = input as HTMLElement
+        const type = inputElement.getAttribute('type') || 'text'
+        
+        // Skip hidden fields
+        if (type === 'hidden') return
+        
+        // Generate selector
+        const selector = generateSelector(inputElement, questionType)
+        if (!selector) return
+        
+        // Find label text for this specific input
+        let labelText = ''
+        
+        // For radio/checkbox, get the specific option text
+        if (type === 'radio' || type === 'checkbox') {
+          const labelElement = inputElement.parentElement?.querySelector('span.ng-binding, label')
+          if (labelElement) {
+            labelText = labelElement.textContent?.trim() || ''
+          }
+        } else {
+          // For text inputs, use the question text as label
+          labelText = questionText
+        }
+        
+        if (labelText) {
+          fields.push({
+            selector,
+            type,
+            label: labelText,
+            value: inputElement.getAttribute('value') || undefined
+          })
+        }
+      })
+      
+      if (fields.length > 0) {
+        questions.push({
+          questionText,
+          questionType,
+          helperText: helperText || undefined,
+          fields
+        })
+      }
+    })
+    
+    // Handle standalone inputs that weren't captured in question containers
+    const allInputs = document.querySelectorAll('input, textarea, select')
+    const processedInputs = new Set()
+    
+    // Mark inputs that were already processed
+    questions.forEach((question: any) => {
+      question.fields.forEach((field: any) => {
+        processedInputs.add(field.selector)
+      })
+    })
+    
+    allInputs.forEach((input) => {
+      const inputElement = input as HTMLElement
+      const type = inputElement.getAttribute('type') || 'text'
+      
+      if (type === 'hidden') return
+      
+      const selector = generateSelector(inputElement, type)
+      if (processedInputs.has(selector)) return
+      
+      // Try to find a label for standalone inputs
+      let labelText = ''
+      const id = inputElement.getAttribute('id')
+      if (id) {
+        const label = document.querySelector(`label[for="${id}"]`)
+        if (label) {
+          labelText = label.textContent?.trim() || ''
+        }
+      }
+      
+      // Fallback to placeholder or name
+      if (!labelText) {
+        labelText = inputElement.getAttribute('placeholder') || 
+                   inputElement.getAttribute('name') || 
+                   'Unnamed field'
+      }
+      
+      if (labelText) {
+        questions.push({
+          questionText: labelText,
+          questionType: type === 'textarea' ? 'textarea' : 'text',
+          fields: [{
+            selector,
+            type,
+            label: labelText,
+            value: inputElement.getAttribute('value') || undefined
+          }]
+        })
+      }
+    })
+    
+    return { questions }
+  })
+  
+  // Log the hierarchical structure
+  formStructure.questions.forEach((question, index) => {
+    console.log(`📋 Question ${index + 1}: "${question.questionText}" (${question.questionType})`)
+    if (question.helperText) {
+      console.log(`   Helper: "${question.helperText}"`)
+    }
+    question.fields.forEach((field: any, fieldIndex: number) => {
+      console.log(`   Field ${fieldIndex + 1}: ${field.label} (${field.type})`)
+      console.log(`     Selector: ${field.selector}`)
+    })
+    console.log('')
+  })
+  
+  return formStructure
 }
 
-// Helper function to wait for specific conditions
-async function waitForCondition(page: Page, condition: () => Promise<boolean>, timeout = 10000) {
-  const startTime = Date.now()
-  
-  while (Date.now() - startTime < timeout) {
-    if (await condition()) {
-      return true
-    }
-    await page.waitForTimeout(100)
-  }
-  
-  return false
+// Types
+interface FormField {
+  selector: string
+  type: string
+  label: string
+  value?: string
+}
+
+interface FormQuestion {
+  questionText: string
+  questionType: 'text' | 'radio' | 'checkbox' | 'select' | 'textarea'
+  helperText?: string
+  fields: FormField[]
+}
+
+interface FormStructure {
+  questions: FormQuestion[]
 }
